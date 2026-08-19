@@ -1,21 +1,18 @@
-import React, { useCallback, useEffect, useMemo, useRef, useState } from 'react';
+import React, { useCallback, useEffect, useRef, useState } from 'react';
 import { Box, Text, useApp, useInput, useStdout } from 'ink';
-import TextInput from 'ink-text-input';
-import path from 'node:path';
 import fs from 'node:fs';
+import { readLiveSessions } from '../claude/live.js';
+import { indexTranscripts, locateForkPoint } from '../claude/transcripts.js';
+import { readBranches, addBranch } from '../claude/branches.js';
+import { buildGraph, flattenTree, type SessionNode, type TreeRow } from '../graph.js';
+import { PtyManager } from '../pty.js';
+import { TerminalPane } from './TerminalPane.js';
+import { ACCENT, BranchForm, HelpPane, SelectionInfo, TreeList, type ViewMode } from './Sidebar.js';
 
 /** Append to $CLOOM_DEBUG if set — for driving the TUI under test harnesses. */
 const debugLog = (m: string) => {
   if (process.env.CLOOM_DEBUG) fs.appendFileSync(process.env.CLOOM_DEBUG, `${m}\n`);
 };
-import { readLiveSessions } from '../claude/live.js';
-import { indexTranscripts, locateForkPoint } from '../claude/transcripts.js';
-import { readBranches } from '../claude/branches.js';
-import { buildGraph, flattenTree, type SessionNode, type TreeRow } from '../graph.js';
-import { branchSession, resumeSession, newSession } from '../actions/claude.js';
-import { detectLauncher } from '../actions/terminal.js';
-import { shortId } from '../claude/paths.js';
-import { formatAge, oneLine, shortenHome, truncate } from './format.js';
 
 export interface AppProps {
   scopeDir: string;
@@ -23,15 +20,9 @@ export interface AppProps {
   showAll: boolean;
 }
 
-type Mode = 'tree' | 'branch' | 'help';
-
-const STATUS_GLYPH: Record<SessionNode['status'], { glyph: string; color: string; word: string }> = {
-  busy: { glyph: '●', color: 'yellow', word: 'busy' },
-  idle: { glyph: '●', color: 'green', word: 'live' },
-  dormant: { glyph: '○', color: 'gray', word: 'dormant' },
-};
-
-const ACCENT = '#3FB6C0';
+type Focus = 'sidebar' | 'terminal';
+type Overlay = 'none' | 'branch' | 'help';
+const FOCUS_KEY = '\x1d'; // ctrl-]
 
 export function App({ scopeDir, scopeLabel, showAll: initialShowAll }: AppProps) {
   const { exit } = useApp();
@@ -40,19 +31,41 @@ export function App({ scopeDir, scopeLabel, showAll: initialShowAll }: AppProps)
   const [rows, setRows] = useState<TreeRow[]>([]);
   const [liveCount, setLiveCount] = useState(0);
   const [selected, setSelected] = useState(0);
-  const [mode, setMode] = useState<Mode>('tree');
+  const [scrollTop, setScrollTop] = useState(0);
   const [showAll, setShowAll] = useState(initialShowAll);
+  const [view, setView] = useState<ViewMode>('tree');
+  const [focus, setFocus] = useState<Focus>('sidebar');
+  const [overlay, setOverlay] = useState<Overlay>('none');
   const [toast, setToast] = useState<{ text: string; kind: 'info' | 'error' } | null>(null);
+  const [activePane, setActivePane] = useState<string | undefined>();
+  const [frame, setFrame] = useState(0);
   const [forkPoints, setForkPoints] = useState<Record<string, string>>({});
   const forkLookups = useRef(new Set<string>());
-  const [tick, setTick] = useState(0);
-  const [scrollTop, setScrollTop] = useState(0);
 
-  // Branch form state
+  // Branch form
   const [formName, setFormName] = useState('');
   const [formIntent, setFormIntent] = useState('');
   const [formWorktree, setFormWorktree] = useState(false);
   const [formField, setFormField] = useState<'name' | 'intent' | 'worktree'>('name');
+
+  const ptyRef = useRef<PtyManager | null>(null);
+  if (!ptyRef.current) ptyRef.current = new PtyManager();
+  const ptys = ptyRef.current;
+
+  const focusRef = useRef(focus);
+  focusRef.current = focus;
+  const activeRef = useRef(activePane);
+  activeRef.current = activePane;
+
+  // ---- layout ----
+  const sidebarW = Math.max(30, Math.min(42, Math.floor(size.cols * 0.28)));
+  const termW = size.cols - sidebarW - 1;
+  const termH = size.rows - 1; // footer
+  const listHeight = Math.max(3, termH - 4 - (overlay === 'branch' ? 8 : 0));
+
+  useEffect(() => {
+    ptys.setSize(Math.max(20, termW), Math.max(5, termH));
+  }, [ptys, termW, termH]);
 
   useEffect(() => {
     const onResize = () => setSize({ cols: stdout.columns || 100, rows: stdout.rows || 30 });
@@ -62,6 +75,7 @@ export function App({ scopeDir, scopeLabel, showAll: initialShowAll }: AppProps)
     };
   }, [stdout]);
 
+  // ---- data refresh ----
   const refresh = useCallback(async () => {
     try {
       const [live, transcripts, branches] = await Promise.all([readLiveSessions(), indexTranscripts(), readBranches()]);
@@ -73,15 +87,58 @@ export function App({ scopeDir, scopeLabel, showAll: initialShowAll }: AppProps)
       setToast({ text: `refresh failed: ${err?.message ?? err}`, kind: 'error' });
     }
   }, [scopeDir, showAll]);
+  const refreshRef = useRef(refresh);
+  refreshRef.current = refresh;
+
+  // ---- pty events: throttle repaints to ~30fps ----
+  useEffect(() => {
+    let pending = false;
+    const onData = (id: string) => {
+      if (id !== activeRef.current || pending) return;
+      pending = true;
+      setTimeout(() => {
+        pending = false;
+        setFrame((f) => f + 1);
+      }, 33);
+    };
+    const onExit = (id: string) => {
+      if (id === activeRef.current) setFrame((f) => f + 1);
+      void refreshRef.current();
+    };
+    ptys.on('data', onData);
+    ptys.on('exit', onExit);
+    return () => {
+      ptys.off('data', onData);
+      ptys.off('exit', onExit);
+    };
+  }, [ptys]);
+
+  useEffect(() => () => ptys.disposeAll(), [ptys]);
+
+  // ---- raw stdin routing: terminal focus sends bytes straight to the pty ----
+  useEffect(() => {
+    const onData = (data: Buffer | string) => {
+      if (focusRef.current !== 'terminal') return;
+      const str = typeof data === 'string' ? data : data.toString('utf8');
+      const idx = str.indexOf(FOCUS_KEY);
+      if (idx !== -1) {
+        const rest = str.slice(0, idx) + str.slice(idx + 1);
+        if (rest && activeRef.current) ptys.write(activeRef.current, rest);
+        setFocus('sidebar');
+        return;
+      }
+      if (activeRef.current) ptys.write(activeRef.current, str);
+    };
+    process.stdin.on('data', onData);
+    return () => {
+      process.stdin.off('data', onData);
+    };
+  }, [ptys]);
 
   useEffect(() => {
     void refresh();
-    const t = setInterval(() => void refresh(), 2000);
-    const clock = setInterval(() => setTick((n) => n + 1), 10000);
-    return () => {
-      clearInterval(t);
-      clearInterval(clock);
-    };
+    const t = setInterval(() => void refresh(), 2500);
+    return () => clearInterval(t);
   }, [refresh]);
 
   useEffect(() => {
@@ -94,33 +151,65 @@ export function App({ scopeDir, scopeLabel, showAll: initialShowAll }: AppProps)
     if (selected >= rows.length) setSelected(Math.max(0, rows.length - 1));
   }, [rows, selected]);
 
+  const itemsPerPage = Math.max(1, Math.floor(listHeight / (view === 'graph' ? 2 : 1)));
+  useEffect(() => {
+    if (selected < scrollTop) setScrollTop(selected);
+    else if (selected >= scrollTop + itemsPerPage) setScrollTop(selected - itemsPerPage + 1);
+  }, [selected, scrollTop, itemsPerPage]);
+
   const current = rows[selected]?.node;
 
-  // Lazily resolve "forked at turn N" for the selected node.
+  // fork-point lookup for selection
   useEffect(() => {
     const n = current;
     if (!n?.parentId || !n.forkMessageUuid || forkPoints[n.id] || forkLookups.current.has(n.id)) return;
-    const parent = rows.find((r) => r.node.id === n.parentId)?.node;
-    if (!parent?.meta?.file) return;
+    const parentMeta = rows.find((r) => r.node.id === n.parentId)?.node.meta;
+    if (!parentMeta?.file) return;
     forkLookups.current.add(n.id);
-    void locateForkPoint(parent.meta.file, n.forkMessageUuid).then((fp) => {
-      if (fp) setForkPoints((m) => ({ ...m, [n.id]: `turn ${fp.turn}${fp.preview ? ` — “${oneLine(fp.preview, 60)}”` : ''}` }));
+    void locateForkPoint(parentMeta.file, n.forkMessageUuid).then((fp) => {
+      if (fp) setForkPoints((m) => ({ ...m, [n.id]: `turn ${fp.turn}` }));
     });
   }, [current, rows, forkPoints]);
 
-  const listHeight = Math.max(3, size.rows - 4); // header + footer + toast
+  // Adopt real session ids once a spawned pane registers itself
   useEffect(() => {
-    if (selected < scrollTop) setScrollTop(selected);
-    else if (selected >= scrollTop + listHeight) setScrollTop(selected - listHeight + 1);
-  }, [selected, scrollTop, listHeight]);
+    const placeholders = ptys.ids().filter((id) => id.startsWith('branch-') || id.startsWith('new-'));
+    if (placeholders.length === 0) return;
+    void readLiveSessions().then((live) => {
+      for (const id of placeholders) {
+        const s = ptys.get(id);
+        if (!s || s.exited) continue;
+        const hit = live.find((l) => l.pid === s.pty.pid);
+        if (hit) {
+          ptys.rekey(id, hit.sessionId);
+          if (activeRef.current === id) setActivePane(hit.sessionId);
+        }
+      }
+    });
+  }, [ptys, rows]);
 
-  const openBranchForm = () => {
-    if (!current) return;
-    setFormName('');
-    setFormIntent('');
-    setFormWorktree(false);
-    setFormField('name');
-    setMode('branch');
+  // ---- actions ----
+  const openPane = (node: SessionNode) => {
+    const existing = ptys.get(node.id);
+    if (existing) {
+      setActivePane(node.id);
+      setFocus('terminal');
+      return;
+    }
+    if (node.status !== 'dormant') {
+      setToast({ text: `“${node.label}” is running in another terminal (pid ${node.live?.pid})`, kind: 'error' });
+      return;
+    }
+    ptys.open(node.id, ['--resume', node.id], node.cwd ?? scopeDir, node.label);
+    setActivePane(node.id);
+    setFocus('terminal');
+  };
+
+  const newRoot = () => {
+    const id = `new-${Date.now().toString(36)}`;
+    ptys.open(id, [], scopeDir, 'new session');
+    setActivePane(id);
+    setFocus('terminal');
   };
 
   const submitBranch = async () => {
@@ -130,44 +219,51 @@ export function App({ scopeDir, scopeLabel, showAll: initialShowAll }: AppProps)
       setToast({ text: 'branch needs a name', kind: 'error' });
       return;
     }
-    const cwd = current.cwd ?? scopeDir;
-    try {
-      const where = await branchSession({
-        parentSessionId: current.id,
-        parentLabel: current.label,
-        cwd,
-        name,
-        intent: formIntent.trim() || undefined,
-        worktree: formWorktree,
-      });
-      setToast({ text: `branched “${name}” from “${current.label}” → ${where}`, kind: 'info' });
-      setMode('tree');
-    } catch (err: any) {
-      setToast({ text: String(err?.message ?? err), kind: 'error' });
-    }
+    const intent = formIntent.trim();
+    const note = [
+      `You are the branch "${name}", forked from "${current.label}" (${current.id}).`,
+      `You inherited that session's conversation up to the fork point.`,
+      intent ? `Your assignment: ${intent}` : `Wait for instructions for this branch.`,
+      `When done, finish with a short hand-back note: decisions, files touched, open questions.`,
+    ].join(' ');
+    const args = ['--resume', current.id, '--fork-session', '--name', name];
+    if (formWorktree) args.push('--worktree', name);
+    args.push('--append-system-prompt', note);
+    if (intent) args.push(intent);
+    const paneId = `branch-${Date.now().toString(36)}`;
+    ptys.open(paneId, args, current.cwd ?? scopeDir, name);
+    await addBranch({ name, parentSessionId: current.id, intent: intent || undefined, worktree: formWorktree, createdAt: Date.now() });
+    setOverlay('none');
+    setActivePane(paneId);
+    setFocus('terminal');
+    setToast({ text: `⑂ “${name}” branched from “${current.label}”`, kind: 'info' });
   };
 
+  // ---- input (sidebar focus; terminal focus handled by the raw listener) ----
   useInput((rawInput, key) => {
-    // Coalesced keystrokes arrive as one string (e.g. "jj"); replay them one at a time,
-    // except in text-entry mode where TextInput owns the characters.
-    const inputs = mode === 'tree' && rawInput.length > 1 ? [...rawInput] : [rawInput];
+    if (focus === 'terminal') return;
+    const inputs = overlay === 'none' && rawInput.length > 1 ? [...rawInput] : [rawInput];
     for (const input of inputs) handleKey(input, key);
   });
 
   const handleKey = (input: string, key: Parameters<Parameters<typeof useInput>[0]>[1]) => {
-    if (mode === 'help') {
-      if (key.escape || input === 'q' || input === '?') setMode('tree');
+    if (input === FOCUS_KEY || (key.ctrl && input === ']')) {
+      if (activePane) setFocus('terminal');
       return;
     }
-    if (mode === 'branch') {
+    if (overlay === 'help') {
+      if (key.escape || input === 'q' || input === '?') setOverlay('none');
+      return;
+    }
+    if (overlay === 'branch') {
       if (key.escape) {
-        setMode('tree');
+        setOverlay('none');
         return;
       }
       const order = ['name', 'intent', 'worktree'] as const;
       if (key.tab || key.downArrow || key.upArrow) {
-        const delta = key.upArrow || (key.tab && key.shift) ? -1 : 1;
-        setFormField((f) => order[(order.indexOf(f) + delta + order.length) % order.length]);
+        const d = key.upArrow || (key.tab && key.shift) ? -1 : 1;
+        setFormField((f) => order[(order.indexOf(f) + d + order.length) % order.length]);
         return;
       }
       if (formField === 'worktree' && input === ' ') {
@@ -180,7 +276,7 @@ export function App({ scopeDir, scopeLabel, showAll: initialShowAll }: AppProps)
       }
       return;
     }
-    // tree mode
+    // plain sidebar
     if (input === 'q' || (key.ctrl && input === 'c')) {
       exit();
       return;
@@ -189,243 +285,89 @@ export function App({ scopeDir, scopeLabel, showAll: initialShowAll }: AppProps)
     else if (key.upArrow || input === 'k') setSelected((i) => Math.max(0, i - 1));
     else if (input === 'g') setSelected(0);
     else if (input === 'G') setSelected(Math.max(0, rows.length - 1));
-    else if (input === 'r') void refresh().then(() => setToast({ text: 'refreshed', kind: 'info' }));
-    else if (input === 'a') {
-      setShowAll((v) => !v);
-      setToast({ text: showAll ? `scoped to ${scopeLabel}` : 'showing all projects', kind: 'info' });
-    } else if (input === '?') setMode('help');
-    else if (input === 'b') openBranchForm();
-    else if (input === 'n') {
-      void newSession(current?.cwd ?? scopeDir)
-        .then((w) => setToast({ text: `new session → ${w}`, kind: 'info' }))
-        .catch((e) => setToast({ text: String(e?.message ?? e), kind: 'error' }));
-    } else if (key.return && current) {
-      if (current.status !== 'dormant') {
-        setToast({ text: `“${current.label}” is already running (pid ${current.live?.pid}) — switch to that window`, kind: 'info' });
-      } else {
-        void resumeSession(current.id, current.cwd ?? scopeDir, current.label)
-          .then((w) => setToast({ text: `resumed “${current.label}” → ${w}`, kind: 'info' }))
-          .catch((e) => setToast({ text: String(e?.message ?? e), kind: 'error' }));
+    else if (input === 'v') setView((v) => (v === 'tree' ? 'graph' : 'tree'));
+    else if (input === 'a') setShowAll((v) => !v);
+    else if (input === 'r') void refresh();
+    else if (input === '?') setOverlay('help');
+    else if (input === 'x') {
+      if (activePane) {
+        ptys.close(activePane);
+        const next = ptys.ids().at(-1);
+        setActivePane(next);
+        if (!next) setFocus('sidebar');
       }
-    }
+    } else if (input === 'n') newRoot();
+    else if (input === 'b') {
+      if (!current) return;
+      setFormName('');
+      setFormIntent('');
+      setFormWorktree(false);
+      setFormField('name');
+      setOverlay('branch');
+    } else if (key.return && current) openPane(current);
   };
 
-  const detailWidth = size.cols >= 110 ? 46 : size.cols >= 80 ? 36 : 0;
-  const treeWidth = size.cols - detailWidth - (detailWidth ? 3 : 0);
-  const visible = rows.slice(scrollTop, scrollTop + listHeight);
+  const active = activePane ? ptys.get(activePane) : undefined;
+  void frame; // frame bumps re-render the terminal pane on pty output
 
   return (
     <Box flexDirection="column" width={size.cols} height={size.rows}>
-      <Header scopeLabel={showAll ? 'all projects' : scopeLabel} liveCount={liveCount} total={rows.length} cols={size.cols} />
       <Box flexGrow={1} flexDirection="row">
-        <Box flexDirection="column" width={treeWidth} paddingX={1}>
-          {rows.length === 0 ? (
+        {/* sidebar */}
+        <Box flexDirection="column" width={sidebarW} height={termH}>
+          <Box paddingX={1} justifyContent="space-between">
+            <Text bold color={focus === 'sidebar' ? ACCENT : 'gray'}>cloomcloop</Text>
             <Text dimColor>
-              No sessions here yet. Press <Text color={ACCENT}>n</Text> to start one, or <Text color={ACCENT}>a</Text> to show every project.
+              {showAll ? 'all' : scopeLabel} · {view}
             </Text>
+          </Box>
+          {overlay === 'help' ? (
+            <HelpPane />
           ) : (
-            visible.map((r, i) => (
-              <Row key={r.node.id} row={r} selected={scrollTop + i === selected} width={treeWidth - 2} tick={tick} />
-            ))
+            <>
+              <Box flexGrow={1} flexDirection="column" overflow="hidden">
+                <TreeList rows={rows} selected={selected} scrollTop={scrollTop} height={listHeight} width={sidebarW} attachedId={activePane} view={view} />
+              </Box>
+              {overlay === 'branch' && current ? (
+                <BranchForm parent={current} name={formName} intent={formIntent} worktree={formWorktree} field={formField} onName={setFormName} onIntent={setFormIntent} />
+              ) : (
+                <SelectionInfo node={current} forkPoint={current ? forkPoints[current.id] : undefined} width={sidebarW} />
+              )}
+            </>
           )}
         </Box>
-        {detailWidth > 0 && (
-          <Box flexDirection="column" width={detailWidth} borderStyle="single" borderColor="gray" borderTop={false} borderBottom={false} borderRight={false} paddingX={1}>
-            {mode === 'branch' && current ? (
-              <BranchForm
-                parent={current}
-                name={formName}
-                intent={formIntent}
-                worktree={formWorktree}
-                field={formField}
-                onName={setFormName}
-                onIntent={setFormIntent}
-              />
-            ) : mode === 'help' ? (
-              <Help />
-            ) : (
-              <Detail node={current} forkPoint={current ? forkPoints[current.id] : undefined} width={detailWidth - 3} />
-            )}
-          </Box>
-        )}
+        {/* divider */}
+        <Box width={1} flexDirection="column">
+          {Array.from({ length: termH }, (_, i) => (
+            <Text key={i} dimColor>│</Text>
+          ))}
+        </Box>
+        {/* terminal */}
+        <TerminalPane session={active} focused={focus === 'terminal'} width={termW} height={termH} frame={frame} />
       </Box>
-      <Footer mode={mode} toast={toast} cols={size.cols} />
-    </Box>
-  );
-}
-
-function Header({ scopeLabel, liveCount, total, cols }: { scopeLabel: string; liveCount: number; total: number; cols: number }) {
-  const right = `${liveCount} live · ${total} sessions`;
-  return (
-    <Box paddingX={1} justifyContent="space-between" width={cols}>
-      <Text>
-        <Text bold color={ACCENT}>cloomcloop</Text>
-        <Text dimColor> · </Text>
-        <Text>{scopeLabel}</Text>
-      </Text>
-      <Text dimColor>{right}</Text>
-    </Box>
-  );
-}
-
-function Row({ row, selected, width, tick }: { row: TreeRow; selected: boolean; width: number; tick: number }) {
-  void tick; // re-render ages periodically
-  const { node, prefix } = row;
-  const st = STATUS_GLYPH[node.status];
-  const age = formatAge(node.lastActive);
-  const id = shortId(node.id);
-  const tail = `${id}  ${age.padStart(3)}`;
-  const labelRoom = Math.max(6, width - prefix.length - 2 - tail.length - 2);
-  const label = truncate(node.label, labelRoom);
-  const pad = Math.max(1, width - prefix.length - 2 - label.length - tail.length);
-  return (
-    <Text inverse={selected} wrap="truncate">
-      <Text dimColor>{prefix}</Text>
-      <Text color={st.color}>{st.glyph}</Text>
-      <Text> {label}</Text>
-      <Text>{' '.repeat(pad)}</Text>
-      <Text dimColor>{tail}</Text>
-    </Text>
-  );
-}
-
-function Field({ k, v, color }: { k: string; v?: string; color?: string }) {
-  if (!v) return null;
-  return (
-    <Box flexDirection="row">
-      <Box width={10}>
-        <Text dimColor>{k}</Text>
-      </Box>
-      <Box flexGrow={1}>
-        <Text color={color} wrap="wrap">
-          {v}
+      {/* footer */}
+      <Box paddingX={1} justifyContent="space-between">
+        <Text dimColor wrap="truncate">
+          {toast ? (
+            <Text color={toast.kind === 'error' ? 'red' : ACCENT}>{toast.text}</Text>
+          ) : focus === 'terminal' ? (
+            <>
+              chat: keys go to claude · <Text color={ACCENT}>ctrl-]</Text> sidebar
+            </>
+          ) : overlay === 'branch' ? (
+            <>enter open here · tab fields · esc cancel</>
+          ) : (
+            <>enter open · b branch · n new · v view · x close · a all · ? help · q quit</>
+          )}
         </Text>
-      </Box>
-    </Box>
-  );
-}
-
-function Detail({ node, forkPoint, width }: { node?: SessionNode; forkPoint?: string; width: number }) {
-  if (!node) return <Text dimColor>select a session</Text>;
-  const st = STATUS_GLYPH[node.status];
-  const textWidth = Math.max(10, width - 10);
-  return (
-    <Box flexDirection="column">
-      <Text bold wrap="wrap">
-        {node.label}
-      </Text>
-      <Text dimColor>{node.id}</Text>
-      <Box height={1} />
-      <Field k="status" v={`${st.glyph} ${st.word}${node.live ? ` · pid ${node.live.pid}` : ''}`} color={st.color} />
-      <Field k="cwd" v={shortenHome(node.cwd)} />
-      <Field k="git" v={node.meta?.gitBranch} />
-      <Field k="claude" v={node.meta?.version ?? node.live?.version} />
-      <Field k="active" v={`${formatAge(node.lastActive)} ago`} />
-      {node.parentId && <Field k="forked" v={`from ${shortId(node.parentId)}${forkPoint ? ` at ${forkPoint}` : ''}`} color={ACCENT} />}
-      {node.branch?.intent && <Field k="intent" v={oneLine(node.branch.intent, textWidth * 3)} />}
-      {node.children.length > 0 && <Field k="children" v={String(node.children.length)} />}
-      <Box height={1} />
-      {node.meta?.firstPrompt && (
-        <Box flexDirection="column">
-          <Text dimColor>first prompt</Text>
-          <Text wrap="wrap">{oneLine(node.meta.firstPrompt, textWidth * 3)}</Text>
-        </Box>
-      )}
-      {node.meta?.lastPrompt && node.meta.lastPrompt !== node.meta.firstPrompt && (
-        <Box flexDirection="column" marginTop={1}>
-          <Text dimColor>last prompt</Text>
-          <Text wrap="wrap">{oneLine(node.meta.lastPrompt, textWidth * 3)}</Text>
-        </Box>
-      )}
-      {node.meta?.forkedFrom === undefined && node.parentId === undefined && node.meta && (
-        <Box marginTop={1}>
-          <Text dimColor>root session</Text>
-        </Box>
-      )}
-    </Box>
-  );
-}
-
-function BranchForm(props: {
-  parent: SessionNode;
-  name: string;
-  intent: string;
-  worktree: boolean;
-  field: 'name' | 'intent' | 'worktree';
-  onName: (s: string) => void;
-  onIntent: (s: string) => void;
-}) {
-  const { parent, name, intent, worktree, field, onName, onIntent } = props;
-  return (
-    <Box flexDirection="column">
-      <Text bold color={ACCENT}>branch from “{truncate(parent.label, 30)}”</Text>
-      <Text dimColor>child inherits the full conversation so far</Text>
-      <Box height={1} />
-      <Box>
-        <Text color={field === 'name' ? ACCENT : undefined}>name   </Text>
-        {field === 'name' ? <TextInput value={name} onChange={onName} placeholder="api-refactor" /> : <Text>{name || <Text dimColor>—</Text>}</Text>}
-      </Box>
-      <Box>
-        <Text color={field === 'intent' ? ACCENT : undefined}>intent </Text>
-        {field === 'intent' ? <TextInput value={intent} onChange={onIntent} placeholder="what should this branch do?" /> : <Text>{intent || <Text dimColor>(optional)</Text>}</Text>}
-      </Box>
-      <Box>
-        <Text color={field === 'worktree' ? ACCENT : undefined}>worktr </Text>
-        <Text color={worktree ? 'green' : 'gray'}>{worktree ? '[x] isolated worktree' : '[ ] isolated worktree'}</Text>
-        {field === 'worktree' && <Text dimColor> space toggles</Text>}
-      </Box>
-      <Box height={1} />
-      <Text dimColor>enter next / launch · tab cycle · esc cancel</Text>
-      <Box height={1} />
-      <Text dimColor wrap="wrap">
-        Runs: claude --resume {shortId(parent.id)}… --fork-session --name {name || '<name>'}{worktree ? ` --worktree ${name || '<name>'}` : ''} in a new tab.
-      </Text>
-    </Box>
-  );
-}
-
-function Help() {
-  const L = (k: string, d: string) => (
-    <Box key={k}>
-      <Box width={9}>
-        <Text color={ACCENT}>{k}</Text>
-      </Box>
-      <Text>{d}</Text>
-    </Box>
-  );
-  return (
-    <Box flexDirection="column">
-      <Text bold>keys</Text>
-      {L('↑↓ j k', 'move')}
-      {L('enter', 'resume dormant session in new tab')}
-      {L('b', 'branch: fork selected into a new named agent')}
-      {L('n', 'new root session in this directory')}
-      {L('a', 'toggle: this project ↔ all projects')}
-      {L('r', 'refresh now')}
-      {L('?', 'close help')}
-      {L('q', 'quit')}
-      <Box height={1} />
-      <Text dimColor wrap="wrap">
-        Launcher: {detectLauncher()}. Lineage comes from Claude Code's own forkedFrom records; branches you make here also record their intent in ~/.cloomcloop.
-      </Text>
-    </Box>
-  );
-}
-
-function Footer({ mode, toast, cols }: { mode: Mode; toast: { text: string; kind: 'info' | 'error' } | null; cols: number }) {
-  const keys =
-    mode === 'branch'
-      ? 'enter launch · tab cycle fields · esc cancel'
-      : mode === 'help'
-        ? 'esc close'
-        : '↑↓ move · enter resume · b branch · n new · a all · ? help · q quit';
-  return (
-    <Box flexDirection="column" width={cols}>
-      <Box paddingX={1} height={1}>
-        {toast ? <Text color={toast.kind === 'error' ? 'red' : ACCENT} wrap="truncate">{toast.text}</Text> : <Text> </Text>}
-      </Box>
-      <Box paddingX={1}>
-        <Text dimColor wrap="truncate">{keys}</Text>
+        <Text dimColor wrap="truncate">
+          {liveCount} live · {rows.length} shown
+          {active ? (
+            <>
+              {' '}· pane: <Text color={ACCENT}>{active.title}</Text>
+            </>
+          ) : null}
+        </Text>
       </Box>
     </Box>
   );
