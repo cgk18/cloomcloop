@@ -60,6 +60,11 @@ The transcript JSONL and session registry are **internal Claude Code formats** �
 
 Env vars: `CLOOM_CLAUDE_BIN` swaps the binary run in panes (testing); `CLOOM_DEBUG=<file>` appends diagnostics; `CLOOMCLOOP_DIR` moves cloomcloop's state; `CLAUDE_CONFIG_DIR` is honored like Claude Code does. Nested-session env markers are scrubbed so embedded claudes behave like top-level ones.
 
+## Docs
+
+- [docs/architecture.md](docs/architecture.md) — module map, mechanisms, build log & lessons.
+- [docs/research/](docs/README.md) — the research behind the design: Claude Code primitives, the third-party landscape, and the loop→graph debate.
+
 ## Roadmap
 
 - Hand-back relay: a `Stop` hook in child sessions that summarizes (decisions / files touched / open questions) via `claude -p --output-format json` and posts it to the parent's messaging socket.
