@@ -16,6 +16,8 @@ const debugLog = (m: string) => {
 
 export interface AppProps {
   scopeDir: string;
+  /** directory new sessions start in (the cwd cloomcloop was launched from) */
+  startDir: string;
   scopeLabel: string;
   showAll: boolean;
 }
@@ -24,7 +26,7 @@ type Focus = 'sidebar' | 'terminal';
 type Overlay = 'none' | 'branch' | 'help';
 const FOCUS_KEY = '\x1d'; // ctrl-]
 
-export function App({ scopeDir, scopeLabel, showAll: initialShowAll }: AppProps) {
+export function App({ scopeDir, startDir, scopeLabel, showAll: initialShowAll }: AppProps) {
   const { exit } = useApp();
   const { stdout } = useStdout();
   const [size, setSize] = useState({ cols: stdout.columns || 100, rows: stdout.rows || 30 });
@@ -207,7 +209,7 @@ export function App({ scopeDir, scopeLabel, showAll: initialShowAll }: AppProps)
 
   const newRoot = () => {
     const id = `new-${Date.now().toString(36)}`;
-    ptys.open(id, [], scopeDir, 'new session');
+    ptys.open(id, [], startDir, 'new session');
     setActivePane(id);
     setFocus('terminal');
   };

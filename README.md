@@ -28,11 +28,21 @@ The right pane hosts an actual `claude` process on a pty — it looks identical 
 ## Install / run
 
 ```sh
-npm install && npm run build
-node dist/cli.js            # or: npm link && cloomcloop
-cloomcloop --list           # plain-text tree, no TUI
-cloomcloop --all            # start in all-projects view
+npm install                          # `prepare` builds dist/ automatically
+ln -sf "$PWD/bin/cloomcloop.js" /opt/homebrew/bin/cloomcloop   # or: sudo npm link
 ```
+
+Then from **any repo**:
+
+```sh
+cd ~/code/some-other-project
+cloomcloop            # sidebar scoped to that repo, new sessions start in your cwd
+cloomcloop --all      # every project on the machine
+cloomcloop --list     # plain-text tree, no TUI
+cloomcloop ~/code/x   # scope to an explicit directory
+```
+
+Scoping: the sidebar shows sessions whose cwd is inside the git root of where you ran it (plus their lineage); `n` starts new sessions in the exact directory you launched from.
 
 Needs Node ≥ 20 and Claude Code ≥ 2.1.198 (for `--fork-session`).
 
