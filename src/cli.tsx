@@ -70,8 +70,9 @@ if (!process.stdout.isTTY) {
 }
 
 // Take over the screen the way full-screen TUIs do; restore on exit.
-const ALT_ON = '\x1b[?1049h\x1b[H';
-const ALT_OFF = '\x1b[?1049l';
+// Also enable SGR mouse reporting (clicks + wheel; hold Option to select text).
+const ALT_ON = '\x1b[?1049h\x1b[H\x1b[?1000h\x1b[?1006h';
+const ALT_OFF = '\x1b[?1000l\x1b[?1006l\x1b[?1049l';
 process.stdout.write(ALT_ON);
 const restore = () => process.stdout.write(ALT_OFF);
 process.on('exit', restore);

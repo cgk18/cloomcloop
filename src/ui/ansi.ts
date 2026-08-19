@@ -5,11 +5,12 @@ type Terminal = InstanceType<typeof xterm.Terminal>;
  * Convert the visible viewport of a headless xterm into ANSI-colored strings,
  * one per row, each exactly `cols` display columns wide.
  */
-export function viewportToAnsi(term: Terminal, opts: { cursor?: boolean } = {}): string[] {
+export function viewportToAnsi(term: Terminal, opts: { cursor?: boolean; scrollOffset?: number } = {}): string[] {
   const buf = term.buffer.active;
   const rows = term.rows;
   const cols = term.cols;
-  const top = buf.length - rows < 0 ? 0 : buf.length - rows;
+  const maxTop = Math.max(0, buf.length - rows);
+  const top = Math.max(0, maxTop - (opts.scrollOffset ?? 0));
   const cursorAbs = buf.baseY + buf.cursorY;
   const out: string[] = [];
   const cell = buf.getNullCell();

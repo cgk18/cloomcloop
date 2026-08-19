@@ -8,8 +8,8 @@ import { ACCENT } from './Sidebar.js';
  * Renders the screen of an embedded claude session. `frame` is a monotonically
  * increasing counter bumped on pty output so React re-renders on new data.
  */
-export function TerminalPane(props: { session?: ManagedSession; focused: boolean; width: number; height: number; frame: number }) {
-  const { session, focused, width, height } = props;
+export function TerminalPane(props: { session?: ManagedSession; focused: boolean; width: number; height: number; frame: number; scrollOffset?: number }) {
+  const { session, focused, width, height, scrollOffset = 0 } = props;
   if (!session) {
     return (
       <Box flexDirection="column" width={width} height={height} alignItems="center" justifyContent="center">
@@ -20,12 +20,15 @@ export function TerminalPane(props: { session?: ManagedSession; focused: boolean
       </Box>
     );
   }
-  const lines = viewportToAnsi(session.term, { cursor: focused && !session.exited });
+  const lines = viewportToAnsi(session.term, { cursor: focused && !session.exited && scrollOffset === 0, scrollOffset });
   return (
     <Box flexDirection="column" width={width} height={height}>
       {lines.slice(0, height).map((l, i) => (
         <Text key={i} wrap="truncate">{l || ' '}</Text>
       ))}
+      {scrollOffset > 0 && (
+        <Text backgroundColor="gray" color="black" wrap="truncate">{` ↑ scrolled ${scrollOffset} lines — wheel down or type to follow `}</Text>
+      )}
       {session.exited && (
         <Text backgroundColor="gray" color="black" wrap="truncate">
           {` session ended (${session.exitCode ?? '?'}) — ctrl-] for sidebar, enter to reopen `}

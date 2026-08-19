@@ -37,6 +37,7 @@ An IDE-style shell for Claude Code: session tree/graph in a left sidebar, a **re
 - **Branch gesture** (`b`): `claude --resume <parent> --fork-session --name <n> [--worktree <n>] --append-system-prompt <intent + hand-back instructions> [<intent>]` spawned **in the embedded pane**. Works on any node, any number of times — forks are independent siblings.
 - **Focus model**: `ctrl-]` (0x1d) toggles sidebar ↔ chat. In chat focus a raw `process.stdin` data listener forwards bytes verbatim to the pty (Ink's parsed `useInput` is bypassed for fidelity); the focus byte is stripped from the stream.
 - **Pane identity**: spawned panes start under placeholder ids (`new-…`/`branch-…`); an effect matches `pty.pid` against the live registry and rekeys to the real session id, so the pane shows as `▶` on its own tree node.
+- **Mouse**: SGR mouse reporting (`?1000h`/`?1006h`) enabled at startup. Events are parsed and **stripped in the raw stdin listener** so they never reach the pty as typed bytes (and Ink's `useInput` guards against them too — Ink would otherwise mis-parse them as keys). Click = select / focus, double-click = open, wheel = selection or pane scrollback (offset into the xterm buffer; any keystroke snaps back to the tail). Text selection needs Option held, as in vim/tmux with mouse on.
 - **Env scrubbing**: `CLAUDECODE`, `CLAUDE_CODE_CHILD_SESSION`, `CLAUDE_CODE_SSE_PORT`, `CLAUDE_CODE_ENTRYPOINT` are stripped from pane env — inheriting the child marker silently disables transcript saving.
 - **Scoping**: sidebar filters by git root of the launch dir (ancestors/descendants of lineage kept); `n` starts sessions in the exact launch dir (monorepo-friendly).
 
@@ -54,7 +55,7 @@ An IDE-style shell for Claude Code: session tree/graph in a left sidebar, a **re
 ## Known limits / roadmap
 
 - Sessions running in *other* terminals can't be embedded (pty ownership) — they're marked and refuse politely. Future: talk to them via Claude Code's cross-session sockets.
-- No pane scrollback yet; one visible pane at a time (`x` closes, reopening is cheap).
+- One visible pane at a time (`x` closes, reopening is cheap). Wheel scrollback exists; no search in scrollback yet.
 - **Hand-back relay** (next): Stop hook in child sessions → `claude -p --output-format json` summary (decisions / files touched / open questions) → parent's messaging socket → payload stored on the tree edge.
 - Fork at an arbitrary turn (transcript slicing behind a version guard); `d` diff view child-worktree vs parent.
 

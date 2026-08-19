@@ -41,6 +41,7 @@ export function App({ scopeDir, startDir, scopeLabel, showAll: initialShowAll }:
   const [toast, setToast] = useState<{ text: string; kind: 'info' | 'error' } | null>(null);
   const [activePane, setActivePane] = useState<string | undefined>();
   const [frame, setFrame] = useState(0);
+  const [scrollOffset, setScrollOffset] = useState(0);
   const [forkPoints, setForkPoints] = useState<Record<string, string>>({});
   const forkLookups = useRef(new Set<string>());
 
@@ -58,12 +59,15 @@ export function App({ scopeDir, startDir, scopeLabel, showAll: initialShowAll }:
   focusRef.current = focus;
   const activeRef = useRef(activePane);
   activeRef.current = activePane;
+  const stateRef = useRef({ rows, scrollTop, view, sidebarW: 0, overlay, selected });
+
 
   // ---- layout ----
   const sidebarW = Math.max(30, Math.min(42, Math.floor(size.cols * 0.28)));
   const termW = size.cols - sidebarW - 1;
   const termH = size.rows - 1; // footer
   const listHeight = Math.max(3, termH - 4 - (overlay === 'branch' ? 8 : 0));
+  stateRef.current = { rows, scrollTop, view, sidebarW, overlay, selected };
 
   useEffect(() => {
     ptys.setSize(Math.max(20, termW), Math.max(5, termH));
@@ -117,11 +121,67 @@ export function App({ scopeDir, startDir, scopeLabel, showAll: initialShowAll }:
 
   useEffect(() => () => ptys.disposeAll(), [ptys]);
 
-  // ---- raw stdin routing: terminal focus sends bytes straight to the pty ----
+  // ---- raw stdin routing ----
+  // Mouse events (SGR: ESC [ < b ; x ; y M/m) are parsed and stripped here so they
+  // never reach the pty as typed bytes; remaining bytes pass to the pty when the
+  // chat is focused. Sidebar-focused keyboard input is left to Ink's useInput.
+  const MOUSE_RE = /\x1b\[<(\d+);(\d+);(\d+)([Mm])/g;
+  const lastClick = useRef({ at: 0, idx: -1 });
+  const onMouse = (btn: number, x: number, y: number, kind: string) => {
+    if (kind !== 'M') return; // presses and wheel only
+    const st = stateRef.current;
+    const inSidebar = x <= st.sidebarW;
+    if (btn === 64 || btn === 65) {
+      // wheel up / down
+      const dir = btn === 64 ? -1 : 1;
+      if (inSidebar) {
+        setSelected((i) => Math.max(0, Math.min(st.rows.length - 1, i + dir)));
+        setFocus('sidebar');
+      } else {
+        setScrollOffset((o) => {
+          const s2 = activeRef.current ? ptys.get(activeRef.current) : undefined;
+          if (!s2) return 0;
+          const max = Math.max(0, s2.term.buffer.active.length - s2.term.rows);
+          return Math.max(0, Math.min(max, o + (dir === -1 ? 3 : -3)));
+        });
+      }
+      return;
+    }
+    if (btn !== 0) return; // left button only
+    if (!inSidebar) {
+      if (activeRef.current) setFocus('terminal');
+      return;
+    }
+    setFocus('sidebar');
+    if (st.overlay !== 'none') return;
+    const perItem = st.view === 'graph' ? 2 : 1;
+    const idx = st.scrollTop + Math.floor((y - 2) / perItem); // row 1 = header
+    if (y < 2 || idx < 0 || idx >= st.rows.length) return;
+    const now = Date.now();
+    const dbl = now - lastClick.current.at < 450 && lastClick.current.idx === idx;
+    lastClick.current = { at: now, idx };
+    setSelected(idx);
+    if (dbl) {
+      const node = st.rows[idx]?.node;
+      if (node) openPaneRef.current(node);
+    }
+  };
+  const onMouseRef = useRef(onMouse);
+  onMouseRef.current = onMouse;
+
   useEffect(() => {
     const onData = (data: Buffer | string) => {
-      if (focusRef.current !== 'terminal') return;
-      const str = typeof data === 'string' ? data : data.toString('utf8');
+      const raw = typeof data === 'string' ? data : data.toString('utf8');
+      let str = '';
+      let last = 0;
+      for (const m of raw.matchAll(MOUSE_RE)) {
+        str += raw.slice(last, m.index);
+        last = (m.index ?? 0) + m[0].length;
+        onMouseRef.current(Number(m[1]), Number(m[2]), Number(m[3]), m[4]);
+      }
+      str += raw.slice(last);
+      if (focusRef.current !== 'terminal' || str === '') return;
+      setScrollOffset(0); // typing snaps back to the live tail
       const idx = str.indexOf(FOCUS_KEY);
       if (idx !== -1) {
         const rest = str.slice(0, idx) + str.slice(idx + 1);
@@ -135,6 +195,7 @@ export function App({ scopeDir, startDir, scopeLabel, showAll: initialShowAll }:
     return () => {
       process.stdin.off('data', onData);
     };
+    // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [ptys]);
 
   useEffect(() => {
@@ -191,10 +252,12 @@ export function App({ scopeDir, startDir, scopeLabel, showAll: initialShowAll }:
   }, [ptys, rows]);
 
   // ---- actions ----
+  const openPaneRef = useRef<(node: SessionNode) => void>(() => {});
   const openPane = (node: SessionNode) => {
     const existing = ptys.get(node.id);
     if (existing) {
       setActivePane(node.id);
+      setScrollOffset(0);
       setFocus('terminal');
       return;
     }
@@ -206,6 +269,7 @@ export function App({ scopeDir, startDir, scopeLabel, showAll: initialShowAll }:
     setActivePane(node.id);
     setFocus('terminal');
   };
+  openPaneRef.current = openPane;
 
   const newRoot = () => {
     const id = `new-${Date.now().toString(36)}`;
@@ -244,7 +308,9 @@ export function App({ scopeDir, startDir, scopeLabel, showAll: initialShowAll }:
   // ---- input (sidebar focus; terminal focus handled by the raw listener) ----
   useInput((rawInput, key) => {
     if (focus === 'terminal') return;
-    const inputs = overlay === 'none' && rawInput.length > 1 ? [...rawInput] : [rawInput];
+    if (rawInput.includes('\x1b[<') || rawInput.includes('[<')) return; // mouse reports
+    const splittable = overlay === 'none' && rawInput.length > 1 && !rawInput.includes('\x1b');
+    const inputs = splittable ? [...rawInput] : [rawInput];
     for (const input of inputs) handleKey(input, key);
   });
 
@@ -345,7 +411,7 @@ export function App({ scopeDir, startDir, scopeLabel, showAll: initialShowAll }:
           ))}
         </Box>
         {/* terminal */}
-        <TerminalPane session={active} focused={focus === 'terminal'} width={termW} height={termH} frame={frame} />
+        <TerminalPane session={active} focused={focus === 'terminal'} width={termW} height={termH} frame={frame} scrollOffset={scrollOffset} />
       </Box>
       {/* footer */}
       <Box paddingX={1} justifyContent="space-between">
