@@ -2,7 +2,7 @@
 
 ## What it is
 
-An IDE-style shell for Claude Code: session tree/graph in a left sidebar, a **real `claude` process embedded in the right pane**. Branching is a gesture; lineage comes from Claude Code's own records; no handoff markdown.
+An IDE-style shell for Claude Code: session tree/metro in a left sidebar, a **real `claude` process embedded in the right pane**. Branching is a gesture; lineage comes from Claude Code's own records; no handoff markdown.
 
 ```
 ┌ sidebar (tree ⇄ graph) ──────┬─ chat: real claude on a pty ─────────┐

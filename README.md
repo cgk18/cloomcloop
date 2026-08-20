@@ -1,6 +1,6 @@
 # cloomcloop
 
-An IDE-style shell for Claude Code: your sessions as a tree/graph on the left, a **real embedded `claude` chat** on the right. Branch one agent into many without writing handoff markdown.
+An IDE-style shell for Claude Code: your sessions as a tree/metro on the left, a **real embedded `claude` chat** on the right. Branch one agent into many without writing handoff markdown.
 
 ```
  cloomcloop      myproj · tree  │╭─── Claude Code v2.1.x ─────────────────────────╮
@@ -17,14 +17,14 @@ An IDE-style shell for Claude Code: your sessions as a tree/graph on the left, a
 
 ## What it does
 
-The right pane hosts an actual `claude` process on a pty — it looks identical to Claude Code because it *is* Claude Code. The left sidebar is the session tree (toggle to a 2-line graph-card view with `v`).
+The right pane hosts an actual `claude` process on a pty — it looks identical to Claude Code because it *is* Claude Code. The left sidebar is the session tree (toggle to a 2-line metro view with `v`).
 
 - **`enter`** — open the selected session in the pane (resumes dormant sessions; sessions running in *other* terminals can't be embedded and say so).
 - **`b`** — branch the selected session: name + one-line intent (+ optional git worktree). Runs `claude --resume <id> --fork-session` right in the pane; the child inherits the whole conversation and the intent goes in via `--append-system-prompt` with hand-back instructions. **Branching a parent that already has children just adds a sibling** — fork as many times as you like, from any node.
 - **`ctrl-]`** — jump between sidebar and chat. In chat focus every other key goes straight to claude.
 - **Mouse works**: click a session to select it, double-click to open it in the pane, click either pane to move focus, wheel to move the selection or scroll the chat's scrollback (typing snaps back to live). Hold Option to select/copy text, as in any mouse-enabled terminal app.
 - **`ctrl-\`** — collapse the sidebar to a thin status strip (chat takes the full width; claude reflows); toggle back or click the strip.
-- **`n`** new root session · **`x`** close pane · **`v`** tree ↔ graph · **`a`** this project ↔ all · **`?`** help · **`q`** quit (embedded sessions end but stay resumable).
+- **`n`** new root session · **`x`** close pane · **`v`** tree ↔ metro · **`a`** this project ↔ all · **`?`** help · **`q`** quit (embedded sessions end but stay resumable).
 - Sees every session on the machine — live ones via the session registry, past ones via transcripts — and draws lineage from Claude Code's own `forkedFrom` records ("⑂ from &lt;id&gt; @ turn N").
 
 ## Install / run

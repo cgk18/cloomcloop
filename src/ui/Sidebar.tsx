@@ -7,7 +7,32 @@ import { formatAge, oneLine, shortenHome, truncate } from './format.js';
 
 export const ACCENT = '#3FB6C0';
 
-export type ViewMode = 'tree' | 'graph';
+export type ViewMode = 'tree' | 'metro';
+
+/** One renderable sidebar line. `idx` points into the flattened row array. */
+export interface DisplayLine {
+  kind: 'node' | 'sub' | 'gap';
+  idx: number;
+}
+
+/**
+ * Flatten tree rows into display lines for a view.
+ * metro: 1 line per node, an intent line under branches that have one,
+ * and a blank separator between root subtrees.
+ */
+export function buildDisplay(rows: TreeRow[], view: ViewMode): { lines: DisplayLine[]; lineOfRow: number[] } {
+  const lines: DisplayLine[] = [];
+  const lineOfRow: number[] = [];
+  rows.forEach((r, i) => {
+    if (view === 'metro' && r.depth === 0 && i > 0) lines.push({ kind: 'gap', idx: i });
+    lineOfRow[i] = lines.length;
+    lines.push({ kind: 'node', idx: i });
+    if (view === 'metro' && r.node.branch?.intent) lines.push({ kind: 'sub', idx: i });
+  });
+  return { lines, lineOfRow };
+}
+
+const metroRail = (prefix: string) => prefix.replace(/│/g, '┃').replace(/├─/g, '┣━').replace(/└─/g, '┗━');
 
 const GLYPH: Record<SessionNode['status'], { g: string; color: string }> = {
   busy: { g: '●', color: 'yellow' },
@@ -34,28 +59,40 @@ export function TreeList(props: {
       </Box>
     );
   }
-  const perItem = view === 'graph' ? 2 : 1;
-  const visible = rows.slice(scrollTop, scrollTop + Math.max(1, Math.floor(height / perItem)));
+  const { lines } = buildDisplay(rows, view);
+  const visible = lines.slice(scrollTop, scrollTop + height);
   return (
     <Box flexDirection="column" paddingX={1}>
-      {visible.map((r, i) => {
-        const idx = scrollTop + i;
+      {visible.map((l, i) => {
+        const key = `${l.kind}-${l.idx}-${scrollTop + i}`;
+        if (l.kind === 'gap') return <Text key={key}> </Text>;
+        const r = rows[l.idx];
+        if (!r) return <Text key={key}> </Text>;
         const n = r.node;
-        const st = GLYPH[n.status];
+        const isSel = l.idx === selected;
         const attached = n.id === attachedId;
-        if (view === 'graph') {
+        const prefix = view === 'metro' ? metroRail(r.prefix) : r.prefix;
+        if (l.kind === 'sub') {
+          const cont = view === 'metro'
+            ? metroRail(r.prefix.replace(/├─/g, '│ ').replace(/└─/g, '  '))
+            : r.prefix;
+          const railTail = n.children.length > 0 ? '┃  ' : '   ';
           return (
-            <GraphRow key={n.id} row={r} selected={idx === selected} attached={attached} width={width - 2} />
+            <Text key={key} wrap="truncate">
+              <Text dimColor>{cont}{railTail}</Text>
+              <Text dimColor color={isSel ? ACCENT : undefined} italic>“{truncate(n.branch?.intent ?? '', Math.max(4, width - 2 - cont.length - 5))}”</Text>
+            </Text>
           );
         }
+        const st = GLYPH[n.status];
         const age = formatAge(n.lastActive);
         const tailTxt = `${age.padStart(3)}`;
-        const room = Math.max(4, width - 2 - r.prefix.length - 2 - tailTxt.length - 2);
+        const room = Math.max(4, width - 2 - prefix.length - 2 - tailTxt.length - 2);
         const label = truncate(n.label, room);
-        const pad = Math.max(1, width - 2 - r.prefix.length - 2 - label.length - tailTxt.length);
+        const pad = Math.max(1, width - 2 - prefix.length - 2 - label.length - tailTxt.length);
         return (
-          <Text key={n.id} inverse={idx === selected} wrap="truncate">
-            <Text dimColor>{r.prefix}</Text>
+          <Text key={key} inverse={isSel} wrap="truncate">
+            <Text dimColor>{prefix}</Text>
             <Text color={attached ? ACCENT : st.color}>{attached ? '▶' : st.g}</Text>
             <Text bold={attached}> {label}</Text>
             <Text>{' '.repeat(pad)}</Text>
@@ -63,34 +100,6 @@ export function TreeList(props: {
           </Text>
         );
       })}
-    </Box>
-  );
-}
-
-/** Two-line card for the graph view: name row + detail row hanging off the rail. */
-function GraphRow({ row, selected, attached, width }: { row: TreeRow; selected: boolean; attached: boolean; width: number }) {
-  const n = row.node;
-  const st = GLYPH[n.status];
-  const rail = row.prefix; // e.g. "│ ├─"
-  // Continuation rail for the second line: verticals persist, ├─ → │ , └─ → "  "
-  const cont = rail.replace(/├─/g, '│ ').replace(/└─/g, '  ');
-  const childRail = n.children.length > 0 ? '│' : ' ';
-  const room = Math.max(4, width - rail.length - 3);
-  const name = truncate(n.label, room);
-  const meta = `${n.status}${attached ? ' · open' : ''} · ${formatAge(n.lastActive)}${n.children.length ? ` · ⑂${n.children.length}` : ''}`;
-  const sub = n.branch?.intent ? `${meta} · ${n.branch.intent}` : meta;
-  return (
-    <Box flexDirection="column">
-      <Text inverse={selected} wrap="truncate">
-        <Text dimColor>{rail}</Text>
-        <Text color={attached ? ACCENT : st.color}>{attached ? '▶' : st.g}</Text>
-        <Text bold={selected || attached}> {name}</Text>
-      </Text>
-      <Text wrap="truncate">
-        <Text dimColor>{cont}</Text>
-        <Text dimColor>{childRail} </Text>
-        <Text dimColor color={selected ? ACCENT : undefined}>{truncate(sub, Math.max(4, width - cont.length - 4))}</Text>
-      </Text>
     </Box>
   );
 }
@@ -158,7 +167,7 @@ export function HelpPane() {
       {L('b', 'branch selected (works on any node)')}
       {L('n', 'new root session')}
       {L('x', 'close embedded pane')}
-      {L('v', 'tree ↔ graph view')}
+      {L('v', 'tree ↔ metro view')}
       {L('a', 'this project ↔ all projects')}
       {L('r', 'refresh')}
       {L('q', 'quit (panes end; sessions resumable)')}

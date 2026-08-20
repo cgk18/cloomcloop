@@ -7,7 +7,7 @@ import { readBranches, addBranch } from '../claude/branches.js';
 import { buildGraph, flattenTree, type SessionNode, type TreeRow } from '../graph.js';
 import { PtyManager } from '../pty.js';
 import { TerminalPane } from './TerminalPane.js';
-import { ACCENT, BranchForm, HelpPane, SelectionInfo, TreeList, type ViewMode } from './Sidebar.js';
+import { ACCENT, BranchForm, buildDisplay, HelpPane, SelectionInfo, TreeList, type ViewMode } from './Sidebar.js';
 
 /** Append to $CLOOM_DEBUG if set — for driving the TUI under test harnesses. */
 const debugLog = (m: string) => {
@@ -36,7 +36,7 @@ export function App({ scopeDir, startDir, scopeLabel, showAll: initialShowAll }:
   const [selected, setSelected] = useState(0);
   const [scrollTop, setScrollTop] = useState(0);
   const [showAll, setShowAll] = useState(initialShowAll);
-  const [view, setView] = useState<ViewMode>('tree');
+  const [view, setView] = useState<ViewMode>('metro');
   const [focus, setFocus] = useState<Focus>('sidebar');
   const [collapsed, setCollapsed] = useState(false);
   const [overlay, setOverlay] = useState<Overlay>('none');
@@ -61,7 +61,7 @@ export function App({ scopeDir, startDir, scopeLabel, showAll: initialShowAll }:
   focusRef.current = focus;
   const activeRef = useRef(activePane);
   activeRef.current = activePane;
-  const stateRef = useRef({ rows, scrollTop, view, sidebarW: 0, overlay, selected, collapsed });
+  const stateRef = useRef({ rows, scrollTop, view, sidebarW: 0, overlay, selected, collapsed, display: { lines: [] as ReturnType<typeof buildDisplay>['lines'], lineOfRow: [] as number[] } });
 
 
   // ---- layout ----
@@ -70,7 +70,8 @@ export function App({ scopeDir, startDir, scopeLabel, showAll: initialShowAll }:
   const termW = size.cols - sidebarW - 1;
   const termH = size.rows - 1; // footer
   const listHeight = Math.max(3, termH - 4 - (overlay === 'branch' ? 8 : 0));
-  stateRef.current = { rows, scrollTop, view, sidebarW, overlay, selected, collapsed };
+  const display = buildDisplay(rows, view);
+  stateRef.current = { rows, scrollTop, view, sidebarW, overlay, selected, collapsed, display };
 
   const toggleCollapsed = (focusSidebarOnExpand = false) => {
     setCollapsed((c) => {
@@ -174,9 +175,10 @@ export function App({ scopeDir, startDir, scopeLabel, showAll: initialShowAll }:
     }
     setFocus('sidebar');
     if (st.overlay !== 'none') return;
-    const perItem = st.view === 'graph' ? 2 : 1;
-    const idx = st.scrollTop + Math.floor((y - 2) / perItem); // row 1 = header
-    if (y < 2 || idx < 0 || idx >= st.rows.length) return;
+    const line = st.display.lines[st.scrollTop + (y - 2)]; // row 1 = header
+    if (y < 2 || !line || line.kind === 'gap') return;
+    const idx = line.idx;
+    if (idx < 0 || idx >= st.rows.length) return;
     const now = Date.now();
     const dbl = now - lastClick.current.at < 450 && lastClick.current.idx === idx;
     lastClick.current = { at: now, idx };
@@ -241,11 +243,13 @@ export function App({ scopeDir, startDir, scopeLabel, showAll: initialShowAll }:
     if (selected >= rows.length) setSelected(Math.max(0, rows.length - 1));
   }, [rows, selected]);
 
-  const itemsPerPage = Math.max(1, Math.floor(listHeight / (view === 'graph' ? 2 : 1)));
   useEffect(() => {
-    if (selected < scrollTop) setScrollTop(selected);
-    else if (selected >= scrollTop + itemsPerPage) setScrollTop(selected - itemsPerPage + 1);
-  }, [selected, scrollTop, itemsPerPage]);
+    const line = display.lineOfRow[selected] ?? 0;
+    if (line < scrollTop) setScrollTop(line);
+    else if (line >= scrollTop + listHeight) setScrollTop(line - listHeight + 1);
+    else if (scrollTop > Math.max(0, display.lines.length - 1)) setScrollTop(0);
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [selected, scrollTop, listHeight, view, rows.length]);
 
   const current = rows[selected]?.node;
 
@@ -389,7 +393,7 @@ export function App({ scopeDir, startDir, scopeLabel, showAll: initialShowAll }:
     else if (key.upArrow || input === 'k') setSelected((i) => Math.max(0, i - 1));
     else if (input === 'g') setSelected(0);
     else if (input === 'G') setSelected(Math.max(0, rows.length - 1));
-    else if (input === 'v') setView((v) => (v === 'tree' ? 'graph' : 'tree'));
+    else if (input === 'v') setView((v) => (v === 'tree' ? 'metro' : 'tree'));
     else if (input === 'a') setShowAll((v) => !v);
     else if (input === 'r') void refresh();
     else if (input === '?') setOverlay('help');

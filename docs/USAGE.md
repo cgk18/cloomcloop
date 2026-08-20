@@ -23,6 +23,11 @@ cloomcloop                # sidebar = this repo's sessions · right pane = chat
 3. **Branch when a side-quest appears.** `ctrl-]` (or click the sidebar), select the parent, press `b` → give it a name + one-line intent (+ optional worktree) → enter. A fork opens in the pane carrying the *entire parent conversation* plus your intent. No handoff files.
 4. **Hop between agents.** Click nodes / double-click to open their chats. `▶` marks the one in the pane. Branch again from anywhere — parents can have any number of children.
 
+## How memory works across branches
+
+- **Forks copy the conversation** — after that, every session's context is independent. A child compacting (or `/rewind`ing) never affects its parent or siblings. Parent compaction after a fork doesn't touch the children either; fork *before* compacting if you want children to inherit the full history.
+- **What is shared**: the repo's auto-memory directory (all sessions, loaded at session start), CLAUDE.md + the code itself (via git — worktree children merge back), and `SendMessage` for live text between running sessions. Nothing else bleeds between branches.
+
 ## Answers to the questions you'll have
 
 - **"Can I use a resumed session as a parent?"** Yes — any session in the tree can be branched, live or dormant, opened or not. `b` forks from its saved transcript directly; you don't need to open it first. A session you resumed in a plain terminal (`claude --resume`) shows in the tree too, and `b` works on it (the fork copies the transcript as it is on disk at that moment).
@@ -38,7 +43,7 @@ cloomcloop                # sidebar = this repo's sessions · right pane = chat
 | `enter` / dbl-click — open in pane | | `ctrl-]` / click sidebar — back |
 | `b` — branch selected | | wheel — scrollback |
 | `n` — new session here | | |
-| `x` — close pane · `v` — tree/graph · `a` — all projects · `r` — refresh · `?` — help · `q` — quit | | |
+| `x` — close pane · `v` — tree/metro · `a` — all projects · `r` — refresh · `?` — help · `q` — quit | | |
 
 Mouse: click select · double-click open · click pane to focus · wheel scroll. Hold **Option** to select/copy text.
 
