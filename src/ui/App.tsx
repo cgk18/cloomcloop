@@ -2,7 +2,7 @@ import React, { useCallback, useEffect, useRef, useState } from 'react';
 import { Box, Text, useApp, useInput, useStdout } from 'ink';
 import fs from 'node:fs';
 import { readLiveSessions } from '../claude/live.js';
-import { indexTranscripts, locateForkPoint } from '../claude/transcripts.js';
+import { indexTranscripts, locateForkPoint, readDialogueTail } from '../claude/transcripts.js';
 import { readBranches, addBranch } from '../claude/branches.js';
 import { buildGraph, flattenTree, type SessionNode, type TreeRow } from '../graph.js';
 import { PtyManager } from '../pty.js';
@@ -61,7 +61,7 @@ export function App({ scopeDir, startDir, scopeLabel, showAll: initialShowAll }:
   focusRef.current = focus;
   const activeRef = useRef(activePane);
   activeRef.current = activePane;
-  const stateRef = useRef({ rows, scrollTop, view, sidebarW: 0, overlay, selected, collapsed, display: { lines: [] as ReturnType<typeof buildDisplay>['lines'], lineOfRow: [] as number[] } });
+  const stateRef = useRef({ rows, scrollTop, view, sidebarW: 0, termW: 0, termH: 0, overlay, selected, collapsed, display: { lines: [] as ReturnType<typeof buildDisplay>['lines'], lineOfRow: [] as number[] } });
 
 
   // ---- layout ----
@@ -71,7 +71,7 @@ export function App({ scopeDir, startDir, scopeLabel, showAll: initialShowAll }:
   const termH = size.rows - 1; // footer
   const listHeight = Math.max(3, termH - 4 - (overlay === 'branch' ? 8 : 0));
   const display = buildDisplay(rows, view);
-  stateRef.current = { rows, scrollTop, view, sidebarW, overlay, selected, collapsed, display };
+  stateRef.current = { rows, scrollTop, view, sidebarW, termW, termH, overlay, selected, collapsed, display };
 
   const toggleCollapsed = (focusSidebarOnExpand = false) => {
     setCollapsed((c) => {
@@ -164,12 +164,7 @@ export function App({ scopeDir, startDir, scopeLabel, showAll: initialShowAll }:
         setSelected((i) => Math.max(0, Math.min(st.rows.length - 1, i + dir)));
         setFocus('sidebar');
       } else {
-        setScrollOffset((o) => {
-          const s2 = activeRef.current ? ptys.get(activeRef.current) : undefined;
-          if (!s2) return 0;
-          const max = Math.max(0, s2.term.buffer.active.length - s2.term.rows);
-          return Math.max(0, Math.min(max, o + (dir === -1 ? 3 : -3)));
-        });
+        scrollPaneRef.current(dir === -1 ? 'up' : 'down', 3);
       }
       return;
     }
@@ -237,13 +232,9 @@ export function App({ scopeDir, startDir, scopeLabel, showAll: initialShowAll }:
       let paged = false;
       str = str.replace(PAGE_RE, (_m, which) => {
         paged = true;
-        setScrollOffset((o) => {
-          const s2 = activeRef.current ? ptys.get(activeRef.current) : undefined;
-          if (!s2) return 0;
-          const page = Math.max(1, Math.floor(s2.term.rows / 2));
-          const max = Math.max(0, s2.term.buffer.active.length - s2.term.rows);
-          return Math.max(0, Math.min(max, o + (which === '5' ? page : -page)));
-        });
+        const s2 = activeRef.current ? ptys.get(activeRef.current) : undefined;
+        const page = Math.max(1, Math.floor((s2?.term.rows ?? 20) / 2));
+        scrollPaneRef.current(which === '5' ? 'up' : 'down', page);
         return '';
       });
       if (str === '') return;
@@ -253,13 +244,7 @@ export function App({ scopeDir, startDir, scopeLabel, showAll: initialShowAll }:
       if (/^(?:\x1b\[[AB])+$/.test(str)) {
         const arrows = str.match(/\x1b\[([AB])/g) ?? [];
         if (arrows.length >= 3) {
-          const up = str.includes('\x1b[A');
-          setScrollOffset((o) => {
-            const s2 = activeRef.current ? ptys.get(activeRef.current) : undefined;
-            if (!s2) return 0;
-            const max = Math.max(0, s2.term.buffer.active.length - s2.term.rows);
-            return Math.max(0, Math.min(max, o + (up ? arrows.length : -arrows.length)));
-          });
+          scrollPaneRef.current(str.includes('\x1b[A') ? 'up' : 'down', arrows.length);
           return;
         }
       }
@@ -339,11 +324,61 @@ export function App({ scopeDir, startDir, scopeLabel, showAll: initialShowAll }:
   }, [ptys, rows]);
 
   // ---- actions ----
+  /** Scroll the chat: claude runs in the alternate screen and handles the wheel
+   *  itself (mouseTrackingMode on) — forward synthesized SGR wheel events to it.
+   *  Plain full-screen apps without mouse tracking get our buffer scrollback. */
+  const scrollPane = (dir: 'up' | 'down', amount: number) => {
+    const id = activeRef.current;
+    const s2 = id ? ptys.get(id) : undefined;
+    if (!s2 || s2.exited) return;
+    const alt = s2.term.buffer.active.type === 'alternate';
+    const mouse = (s2.term.modes as any).mouseTrackingMode && (s2.term.modes as any).mouseTrackingMode !== 'none';
+    if (alt && mouse) {
+      const st = stateRef.current;
+      const cx = Math.max(1, Math.floor(st.termW / 2));
+      const cy = Math.max(1, Math.floor(st.termH / 2));
+      const btn = dir === 'up' ? 64 : 65;
+      const events = Math.max(1, Math.ceil(amount / 3));
+      ptys.write(id!, `\x1b[<${btn};${cx};${cy}M`.repeat(events));
+      return;
+    }
+    setScrollOffset((o) => {
+      const max = Math.max(0, s2.term.buffer.active.length - s2.term.rows);
+      if (dir === 'up' && max === 0) setToast({ text: 'nothing above yet — history starts when this pane opened', kind: 'info' });
+      return Math.max(0, Math.min(max, o + (dir === 'up' ? amount : -amount)));
+    });
+  };
+
+  /** Preload a pane's scrollback with a transcript's recent conversation so
+   *  scrolling up shows history (claude repaints only its current screen). */
+  const preloadHistory = (paneId: string, file: string | undefined, label: string) => {
+    debugLog(`preloadHistory: pane=${paneId} file=${file}`);
+    if (!file) return;
+    void readDialogueTail(file).then((turns) => {
+      debugLog(`preloadHistory turns=${turns.length}`);
+      if (turns.length === 0) return;
+      const dim = '\x1b[2m';
+      const cyan = '\x1b[36m';
+      const reset = '\x1b[0m';
+      const out: string[] = [`${dim}── earlier in “${label}” (replayed from the transcript) ──${reset}`, ''];
+      for (const t of turns) {
+        if (t.role === 'user') out.push(`${cyan}❯ ${t.text.replace(/\r?\n/g, '\r\n  ')}${reset}`);
+        else out.push(`${dim}${t.text.replace(/\r?\n/g, '\r\n')}${reset}`);
+        out.push('');
+      }
+      out.push(`${dim}── live session below ──${reset}`, '');
+      ptys.preloadScrollback(paneId, out);
+      setFrame((f) => f + 1);
+    });
+  };
+
   /** Repaint bursts after opening a pane: claude's first paint can land before
    *  activeRef points at the new pane, so poke the frame a few times. */
   const kickPane = () => {
     for (const ms of [80, 250, 600, 1200]) setTimeout(() => setFrame((f) => f + 1), ms);
   };
+  const scrollPaneRef = useRef(scrollPane);
+  scrollPaneRef.current = scrollPane;
   const openPaneRef = useRef<(node: SessionNode) => void>(() => {});
   const openPane = (node: SessionNode) => {
     debugLog(`openPane called: ${node.id} status=${node.status} live-pid=${node.live?.pid}`);
@@ -364,6 +399,7 @@ export function App({ scopeDir, startDir, scopeLabel, showAll: initialShowAll }:
       debugLog(`openPane spawn: ${node.id} status=${node.status} cwd=${node.cwd ?? scopeDir}`);
       ptys.open(node.id, ['--resume', node.id], node.cwd ?? scopeDir, node.label);
       debugLog(`openPane spawned ok: ${node.id}`);
+      preloadHistory(node.id, node.meta?.file, node.label);
     } catch (err: any) {
       debugLog(`openPane spawn FAILED: ${err?.stack ?? err}`);
       setToast({ text: `couldn't start claude: ${err?.message ?? err}`, kind: 'error' });
@@ -404,6 +440,7 @@ export function App({ scopeDir, startDir, scopeLabel, showAll: initialShowAll }:
     if (intent) args.push(intent);
     const paneId = `branch-${Date.now().toString(36)}`;
     ptys.open(paneId, args, current.cwd ?? scopeDir, name);
+    preloadHistory(paneId, current.meta?.file, `${current.label} (inherited)`);
     await addBranch({ name, parentSessionId: current.id, intent: intent || undefined, worktree: formWorktree, createdAt: Date.now() });
     setOverlay('none');
     setActivePane(paneId);
@@ -472,13 +509,9 @@ export function App({ scopeDir, startDir, scopeLabel, showAll: initialShowAll }:
     else if (key.pageUp) setSelected((i) => Math.max(0, i - 10));
     else if (input === 'u' || input === 'd') {
       // scroll the open chat pane from the sidebar (works in every terminal)
-      setScrollOffset((o) => {
-        const s2 = activeRef.current ? ptys.get(activeRef.current) : undefined;
-        if (!s2) return 0;
-        const page = Math.max(1, Math.floor(s2.term.rows / 2));
-        const max = Math.max(0, s2.term.buffer.active.length - s2.term.rows);
-        return Math.max(0, Math.min(max, o + (input === 'u' ? page : -page)));
-      });
+      const s2 = activeRef.current ? ptys.get(activeRef.current) : undefined;
+      const page = Math.max(1, Math.floor((s2?.term.rows ?? 20) / 2));
+      scrollPane(input === 'u' ? 'up' : 'down', page);
     }
     else if (input === 'g') setSelected(0);
     else if (input === 'G') setSelected(Math.max(0, rows.length - 1));

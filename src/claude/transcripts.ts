@@ -195,6 +195,42 @@ export async function indexTranscripts(): Promise<TranscriptMeta[]> {
   return out;
 }
 
+/** A rendered dialogue turn for scrollback preload. */
+export interface DialogueTurn {
+  role: 'user' | 'assistant';
+  text: string;
+}
+
+/**
+ * Read the last human/assistant turns of a transcript (for scrollback preload).
+ * Reads at most tailBytes from the end; returns up to maxTurns turns.
+ */
+export async function readDialogueTail(file: string, maxTurns = 30, tailBytes = 768 * 1024): Promise<DialogueTurn[]> {
+  let st;
+  try {
+    st = await fs.stat(file);
+  } catch {
+    return [];
+  }
+  const start = Math.max(0, st.size - tailBytes);
+  const chunk = await readChunk(file, start, st.size - start);
+  const turns: DialogueTurn[] = [];
+  for (const rec of parseLines(chunk, start > 0, false)) {
+    if (rec?.type === 'user' && !rec.isMeta && isHumanPrompt(rec)) {
+      const t = promptText(rec.message?.content);
+      if (t) turns.push({ role: 'user', text: t });
+    } else if (rec?.type === 'assistant') {
+      const content = rec.message?.content;
+      if (Array.isArray(content)) {
+        for (const b of content) {
+          if (b?.type === 'text' && typeof b.text === 'string' && b.text.trim()) turns.push({ role: 'assistant', text: b.text });
+        }
+      }
+    }
+  }
+  return turns.slice(-maxTurns);
+}
+
 /**
  * Find how far into the parent a fork happened: returns the 1-based index of the
  * human prompt at/just before `messageUuid`, and the total human prompts seen.

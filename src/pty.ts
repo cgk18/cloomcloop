@@ -83,6 +83,13 @@ export class PtyManager extends EventEmitter {
     return session;
   }
 
+  /** Write text into a pane's SCREEN BUFFER only (scrollback preload) — never to the process. */
+  preloadScrollback(nodeId: string, lines: string[]): void {
+    const s = this.sessions.get(nodeId);
+    if (!s) return;
+    s.term.write(lines.join('\r\n') + '\r\n');
+  }
+
   write(nodeId: string, data: string): void {
     const s = this.sessions.get(nodeId);
     if (s && !s.exited) s.pty.write(data);
