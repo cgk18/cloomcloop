@@ -113,16 +113,24 @@ export function App({ scopeDir, startDir, scopeLabel, showAll: initialShowAll }:
   const refreshRef = useRef(refresh);
   refreshRef.current = refresh;
 
-  // ---- pty events: throttle repaints to ~30fps ----
+  // ---- pty events: leading-edge render, then trailing throttle for bursts ----
   useEffect(() => {
     let pending = false;
+    let last = 0;
     const onData = (id: string) => {
       if (id !== activeRef.current || pending) return;
+      const now = Date.now();
+      if (now - last > 25) {
+        last = now;
+        setFrame((f) => f + 1); // first byte of a burst paints immediately
+        return;
+      }
       pending = true;
       setTimeout(() => {
         pending = false;
+        last = Date.now();
         setFrame((f) => f + 1);
-      }, 33);
+      }, 25);
     };
     const onExit = (id: string) => {
       if (id === activeRef.current) setFrame((f) => f + 1);

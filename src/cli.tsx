@@ -78,7 +78,7 @@ const restore = () => process.stdout.write(ALT_OFF);
 process.on('exit', restore);
 for (const sig of ['SIGINT', 'SIGTERM'] as const) process.on(sig, () => process.exit(0));
 
-const app = render(<App scopeDir={scopeDir} startDir={startDir} scopeLabel={scopeLabel} showAll={showAll} />, { exitOnCtrlC: false });
+const app = render(<App scopeDir={scopeDir} startDir={startDir} scopeLabel={scopeLabel} showAll={showAll} />, { exitOnCtrlC: false, maxFps: 120 });
 try {
   await app.waitUntilExit();
 } finally {

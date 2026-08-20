@@ -34,13 +34,14 @@ export function buildDisplay(rows: TreeRow[], view: ViewMode): { lines: DisplayL
 
 const metroRail = (prefix: string) => prefix.replace(/│/g, '┃').replace(/├─/g, '┣━').replace(/└─/g, '┗━');
 
+
 const GLYPH: Record<SessionNode['status'], { g: string; color: string }> = {
   busy: { g: '●', color: 'yellow' },
   idle: { g: '●', color: 'green' },
   dormant: { g: '○', color: 'gray' },
 };
 
-export function TreeList(props: {
+function TreeListInner(props: {
   rows: TreeRow[];
   selected: number;
   scrollTop: number;
@@ -104,7 +105,9 @@ export function TreeList(props: {
   );
 }
 
-export function SelectionInfo({ node, forkPoint, width }: { node?: SessionNode; forkPoint?: string; width: number }) {
+export const TreeList = React.memo(TreeListInner);
+
+function SelectionInfoInner({ node, forkPoint, width }: { node?: SessionNode; forkPoint?: string; width: number }) {
   if (!node) return null;
   return (
     <Box flexDirection="column" paddingX={1} borderStyle="single" borderColor="gray" borderLeft={false} borderRight={false} borderBottom={false}>
@@ -118,6 +121,8 @@ export function SelectionInfo({ node, forkPoint, width }: { node?: SessionNode; 
     </Box>
   );
 }
+
+export const SelectionInfo = React.memo(SelectionInfoInner);
 
 export function BranchForm(props: {
   parent: SessionNode;

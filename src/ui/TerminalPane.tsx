@@ -1,4 +1,4 @@
-import React from 'react';
+import React, { useMemo } from 'react';
 import { Box, Text } from 'ink';
 import type { ManagedSession } from '../pty.js';
 import { viewportToAnsi } from './ansi.js';
@@ -9,7 +9,11 @@ import { ACCENT } from './Sidebar.js';
  * increasing counter bumped on pty output so React re-renders on new data.
  */
 export function TerminalPane(props: { session?: ManagedSession; focused: boolean; width: number; height: number; frame: number; scrollOffset?: number }) {
-  const { session, focused, width, height, scrollOffset = 0 } = props;
+  const { session, focused, width, height, frame, scrollOffset = 0 } = props;
+  const lines = useMemo(
+    () => (session ? viewportToAnsi(session.term, { cursor: focused && !session.exited && scrollOffset === 0, scrollOffset }) : []),
+    [session, frame, focused, scrollOffset, width, height],
+  );
   if (!session) {
     return (
       <Box flexDirection="column" width={width} height={height} alignItems="center" justifyContent="center">
@@ -20,7 +24,6 @@ export function TerminalPane(props: { session?: ManagedSession; focused: boolean
       </Box>
     );
   }
-  const lines = viewportToAnsi(session.term, { cursor: focused && !session.exited && scrollOffset === 0, scrollOffset });
   return (
     <Box flexDirection="column" width={width} height={height}>
       {lines.slice(0, height).map((l, i) => (
