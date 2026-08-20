@@ -72,8 +72,7 @@ export class PtyManager extends EventEmitter {
     });
     const session: ManagedSession = { nodeId, title, pty, term, exited: false };
     pty.onData((d) => {
-      term.write(d);
-      this.emit('data', nodeId);
+      term.write(d, () => this.emit('data', nodeId));
     });
     pty.onExit(({ exitCode }) => {
       session.exited = true;

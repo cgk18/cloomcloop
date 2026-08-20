@@ -120,7 +120,7 @@ export function App({ scopeDir, startDir, scopeLabel, showAll: initialShowAll }:
     const onData = (id: string) => {
       if (id !== activeRef.current || pending) return;
       const now = Date.now();
-      if (now - last > 25) {
+      if (now - last > 12) {
         last = now;
         setFrame((f) => f + 1); // first byte of a burst paints immediately
         return;
@@ -130,7 +130,7 @@ export function App({ scopeDir, startDir, scopeLabel, showAll: initialShowAll }:
         pending = false;
         last = Date.now();
         setFrame((f) => f + 1);
-      }, 25);
+      }, 12);
     };
     const onExit = (id: string) => {
       if (id === activeRef.current) setFrame((f) => f + 1);
@@ -150,7 +150,7 @@ export function App({ scopeDir, startDir, scopeLabel, showAll: initialShowAll }:
   // Mouse events (SGR: ESC [ < b ; x ; y M/m) are parsed and stripped here so they
   // never reach the pty as typed bytes; remaining bytes pass to the pty when the
   // chat is focused. Sidebar-focused keyboard input is left to Ink's useInput.
-  const MOUSE_RE = /\x1b\[<(\d+);(\d+);(\d+)([Mm])/g;
+  const MOUSE_RE = /\x1b\[<(\d+);(\d+);(\d+)([Mm])|\x1b\[M([\s\S]{3})/g;
   const lastClick = useRef({ at: 0, idx: -1 });
   const onMouse = (btn: number, x: number, y: number, kind: string) => {
     if (kind !== 'M') return; // presses and wheel only
@@ -173,6 +173,11 @@ export function App({ scopeDir, startDir, scopeLabel, showAll: initialShowAll }:
       return;
     }
     if (btn !== 0) return; // left button only
+    if (x === st.sidebarW + 1) {
+      // divider column: toggle collapse either way
+      toggleCollapsedRef.current(false);
+      return;
+    }
     if (!inSidebar) {
       if (activeRef.current) setFocus('terminal');
       return;
@@ -207,7 +212,15 @@ export function App({ scopeDir, startDir, scopeLabel, showAll: initialShowAll }:
       for (const m of raw.matchAll(MOUSE_RE)) {
         str += raw.slice(last, m.index);
         last = (m.index ?? 0) + m[0].length;
-        onMouseRef.current(Number(m[1]), Number(m[2]), Number(m[3]), m[4]);
+        if (m[5] !== undefined) {
+          // legacy X10: 3 bytes, each value+32; release is btn 3 (ignored)
+          const btn = m[5].charCodeAt(0) - 32;
+          const x = m[5].charCodeAt(1) - 32;
+          const y = m[5].charCodeAt(2) - 32;
+          if (btn !== 3) onMouseRef.current(btn, x, y, 'M');
+        } else {
+          onMouseRef.current(Number(m[1]), Number(m[2]), Number(m[3]), m[4]);
+        }
       }
       str += raw.slice(last);
       if (focusRef.current !== 'terminal' || str === '') return;
@@ -218,7 +231,22 @@ export function App({ scopeDir, startDir, scopeLabel, showAll: initialShowAll }:
         toggleCollapsedRef.current();
         return;
       }
-      setScrollOffset(0); // typing snaps back to the live tail
+      // PageUp/PageDown scroll the pane's history (wheel-independent fallback).
+      const PAGE_RE = /\x1b\[([56])~/g;
+      let paged = false;
+      str = str.replace(PAGE_RE, (_m, which) => {
+        paged = true;
+        setScrollOffset((o) => {
+          const s2 = activeRef.current ? ptys.get(activeRef.current) : undefined;
+          if (!s2) return 0;
+          const page = Math.max(1, Math.floor(s2.term.rows / 2));
+          const max = Math.max(0, s2.term.buffer.active.length - s2.term.rows);
+          return Math.max(0, Math.min(max, o + (which === '5' ? page : -page)));
+        });
+        return '';
+      });
+      if (str === '') return;
+      if (!paged) setScrollOffset(0); // typing snaps back to the live tail
       const idx = str.indexOf(FOCUS_KEY);
       if (idx !== -1) {
         const rest = str.slice(0, idx) + str.slice(idx + 1);
@@ -399,6 +427,8 @@ export function App({ scopeDir, startDir, scopeLabel, showAll: initialShowAll }:
     }
     if (key.downArrow || input === 'j') setSelected((i) => Math.min(rows.length - 1, i + 1));
     else if (key.upArrow || input === 'k') setSelected((i) => Math.max(0, i - 1));
+    else if (key.pageDown) setSelected((i) => Math.min(rows.length - 1, i + 10));
+    else if (key.pageUp) setSelected((i) => Math.max(0, i - 10));
     else if (input === 'g') setSelected(0);
     else if (input === 'G') setSelected(Math.max(0, rows.length - 1));
     else if (input === 'v') setView((v) => (v === 'tree' ? 'metro' : 'tree'));

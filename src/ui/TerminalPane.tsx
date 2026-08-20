@@ -24,11 +24,10 @@ export function TerminalPane(props: { session?: ManagedSession; focused: boolean
       </Box>
     );
   }
+  const block = lines.slice(0, height).map((l) => l || ' ').join('\n');
   return (
     <Box flexDirection="column" width={width} height={height}>
-      {lines.slice(0, height).map((l, i) => (
-        <Text key={i} wrap="truncate">{l || ' '}</Text>
-      ))}
+      <Text wrap="truncate-end">{block}</Text>
       {scrollOffset > 0 && (
         <Text backgroundColor="gray" color="black" wrap="truncate">{` ↑ scrolled ${scrollOffset} lines — wheel down or type to follow `}</Text>
       )}
