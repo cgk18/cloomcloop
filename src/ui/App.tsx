@@ -118,6 +118,7 @@ export function App({ scopeDir, startDir, scopeLabel, showAll: initialShowAll }:
     let pending = false;
     let last = 0;
     const onData = (id: string) => {
+      if (process.env.CLOOM_DEBUG) fs.appendFileSync(process.env.CLOOM_DEBUG, `onData id=${id} active=${activeRef.current} pending=${pending}\n`);
       if (id !== activeRef.current || pending) return;
       const now = Date.now();
       if (now - last > 12) {
@@ -265,7 +266,10 @@ export function App({ scopeDir, startDir, scopeLabel, showAll: initialShowAll }:
 
   useEffect(() => {
     void refresh();
-    const t = setInterval(() => void refresh(), 2500);
+    const t = setInterval(() => {
+      void refresh();
+      setFrame((f) => f + 1); // safety net: repaint the pane even if a data event was missed
+    }, 2500);
     return () => clearInterval(t);
   }, [refresh]);
 
@@ -319,6 +323,11 @@ export function App({ scopeDir, startDir, scopeLabel, showAll: initialShowAll }:
   }, [ptys, rows]);
 
   // ---- actions ----
+  /** Repaint bursts after opening a pane: claude's first paint can land before
+   *  activeRef points at the new pane, so poke the frame a few times. */
+  const kickPane = () => {
+    for (const ms of [80, 250, 600, 1200]) setTimeout(() => setFrame((f) => f + 1), ms);
+  };
   const openPaneRef = useRef<(node: SessionNode) => void>(() => {});
   const openPane = (node: SessionNode) => {
     const existing = ptys.get(node.id);
@@ -326,6 +335,7 @@ export function App({ scopeDir, startDir, scopeLabel, showAll: initialShowAll }:
       setActivePane(node.id);
       setScrollOffset(0);
       setFocus('terminal');
+      kickPane();
       return;
     }
     if (existing) ptys.close(node.id); // dead pane: drop it and respawn fresh
@@ -342,6 +352,7 @@ export function App({ scopeDir, startDir, scopeLabel, showAll: initialShowAll }:
     setActivePane(node.id);
     setScrollOffset(0);
     setFocus('terminal');
+    kickPane();
   };
   openPaneRef.current = openPane;
 
@@ -350,6 +361,7 @@ export function App({ scopeDir, startDir, scopeLabel, showAll: initialShowAll }:
     ptys.open(id, [], startDir, 'new session');
     setActivePane(id);
     setFocus('terminal');
+    kickPane();
   };
 
   const submitBranch = async () => {
@@ -376,6 +388,7 @@ export function App({ scopeDir, startDir, scopeLabel, showAll: initialShowAll }:
     setOverlay('none');
     setActivePane(paneId);
     setFocus('terminal');
+    kickPane();
     setToast({ text: `⑂ “${name}” branched from “${current.label}”`, kind: 'info' });
   };
 

@@ -1,4 +1,5 @@
 import React, { useMemo } from 'react';
+import fs from 'node:fs';
 import { Box, Text } from 'ink';
 import type { ManagedSession } from '../pty.js';
 import { viewportToAnsi } from './ansi.js';
@@ -10,10 +11,12 @@ import { ACCENT } from './Sidebar.js';
  */
 export function TerminalPane(props: { session?: ManagedSession; focused: boolean; width: number; height: number; frame: number; scrollOffset?: number }) {
   const { session, focused, width, height, frame, scrollOffset = 0 } = props;
+  const dbg = process.env.CLOOM_DEBUG;
   const lines = useMemo(
     () => (session ? viewportToAnsi(session.term, { cursor: focused && !session.exited && scrollOffset === 0, scrollOffset }) : []),
     [session, frame, focused, scrollOffset, width, height],
   );
+  if (dbg) fs.appendFileSync(dbg, `pane render: sess=${session?.nodeId} frame=${frame} lines=${lines.length} nonempty=${lines.filter((l)=>l.trim()).length}\n`);
   if (!session) {
     return (
       <Box flexDirection="column" width={width} height={height} alignItems="center" justifyContent="center">
