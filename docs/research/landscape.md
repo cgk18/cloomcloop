@@ -55,4 +55,4 @@
 5. **Merging conversational results is unsolved** — everyone does manual parent synthesis.
 6. Non-markdown handoff exists **only inside heavyweight frameworks**.
 
-Open slot: a thin layer on native primitives (`--fork-session`, messaging sockets, worktrees, hooks) with a tree/graph UI where forking is a gesture and edges carry typed payloads. Full illustrated report: https://claude.ai/code/artifact/9f270399-1db6-4caf-a227-5be4a76728ca
+Open slot: a thin layer on native primitives (`--fork-session`, messaging sockets, worktrees, hooks) with a tree/graph UI where forking is a gesture and edges carry typed payloads.
