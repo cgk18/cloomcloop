@@ -24,16 +24,19 @@ export function TerminalPane(props: { session?: ManagedSession; focused: boolean
       </Box>
     );
   }
-  const block = lines.slice(0, height).map((l) => l || ' ').join('\n');
+  const banner = session.exited
+    ? ` session ended (${session.exitCode ?? '?'}) — ctrl-] for sidebar, then enter reopens it `
+    : scrollOffset > 0
+      ? ` ↑ scrolled ${scrollOffset} lines — wheel down / pgdn or type to follow `
+      : undefined;
+  const bodyH = banner ? height - 1 : height; // keep the banner inside the pane, not clipped below it
+  const block = lines.slice(0, bodyH).map((l) => l || ' ').join('\n');
   return (
     <Box flexDirection="column" width={width} height={height}>
       <Text wrap="truncate-end">{block}</Text>
-      {scrollOffset > 0 && (
-        <Text backgroundColor="gray" color="black" wrap="truncate">{` ↑ scrolled ${scrollOffset} lines — wheel down or type to follow `}</Text>
-      )}
-      {session.exited && (
-        <Text backgroundColor="gray" color="black" wrap="truncate">
-          {` session ended (${session.exitCode ?? '?'}) — ctrl-] for sidebar, enter to reopen `}
+      {banner && (
+        <Text backgroundColor={session.exited ? 'red' : 'gray'} color={session.exited ? 'white' : 'black'} wrap="truncate">
+          {banner}
         </Text>
       )}
     </Box>

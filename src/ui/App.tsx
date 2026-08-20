@@ -322,18 +322,25 @@ export function App({ scopeDir, startDir, scopeLabel, showAll: initialShowAll }:
   const openPaneRef = useRef<(node: SessionNode) => void>(() => {});
   const openPane = (node: SessionNode) => {
     const existing = ptys.get(node.id);
-    if (existing) {
+    if (existing && !existing.exited) {
       setActivePane(node.id);
       setScrollOffset(0);
       setFocus('terminal');
       return;
     }
+    if (existing) ptys.close(node.id); // dead pane: drop it and respawn fresh
     if (node.status !== 'dormant') {
       setToast({ text: `“${node.label}” is running in another terminal (pid ${node.live?.pid})`, kind: 'error' });
       return;
     }
-    ptys.open(node.id, ['--resume', node.id], node.cwd ?? scopeDir, node.label);
+    try {
+      ptys.open(node.id, ['--resume', node.id], node.cwd ?? scopeDir, node.label);
+    } catch (err: any) {
+      setToast({ text: `couldn't start claude: ${err?.message ?? err}`, kind: 'error' });
+      return;
+    }
     setActivePane(node.id);
+    setScrollOffset(0);
     setFocus('terminal');
   };
   openPaneRef.current = openPane;
