@@ -47,4 +47,6 @@ cloomcloop                # sidebar = this repo's sessions · right pane = chat
 
 Mouse: click select · double-click open · click pane to focus · wheel scroll. Hold **Option** to select/copy text.
 
-**Collapse the sidebar**: `ctrl-\` from anywhere shrinks it to a thin status strip and gives the chat the full width (claude reflows). `ctrl-\` again — or clicking the strip — pops it back out. The strip still shows one status dot per session (`▶` = your open pane).
+**Collapse the sidebar**: `ctrl-\` from anywhere — or **click the divider line** between the panes — shrinks it to a thin status strip and gives the chat the full width (claude reflows). Toggle back the same way (divider or strip click, or `ctrl-\`). The strip still shows one status dot per session (`▶` = your open pane).
+
+**Scrolling the chat**: wheel works in terminals that report it (iTerm2, Kitty, WezTerm). In **Terminal.app the wheel isn't forwarded to apps** — use `PageUp`/`PageDown` (`fn+↑` / `fn+↓`) instead; typing snaps back to live.
