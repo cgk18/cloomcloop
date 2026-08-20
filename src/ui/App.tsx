@@ -182,6 +182,10 @@ export function App({ scopeDir, startDir, scopeLabel, showAll: initialShowAll }:
       toggleCollapsedRef.current(true); // click on strip: expand and focus the tree
       return;
     }
+    if (y === 1 && x >= st.sidebarW - 3) {
+      toggleCollapsedRef.current(false); // the ‹ button in the header
+      return;
+    }
     setFocus('sidebar');
     if (st.overlay !== 'none') return;
     const line = st.display.lines[st.scrollTop + (y - 2)]; // row 1 = header
@@ -546,7 +550,7 @@ export function App({ scopeDir, startDir, scopeLabel, showAll: initialShowAll }:
         {/* sidebar (or collapsed strip) */}
         {collapsed ? (
           <Box flexDirection="column" width={sidebarW} height={termH}>
-            <Text color={ACCENT}>‹</Text>
+            <Text color={ACCENT}>›</Text>
             {rows.slice(0, termH - 2).map((r) => {
               const n = r.node;
               const open = n.id === activePane;
@@ -561,7 +565,7 @@ export function App({ scopeDir, startDir, scopeLabel, showAll: initialShowAll }:
           <Box paddingX={1} justifyContent="space-between">
             <Text bold color={focus === 'sidebar' ? ACCENT : 'gray'}>cloomcloop <Text dimColor>v0.3</Text></Text>
             <Text dimColor wrap="truncate">
-              {showAll ? `all · ${view}` : view}
+              {showAll ? `all · ${view}` : view} <Text color={ACCENT}>‹</Text>
             </Text>
           </Box>
           {overlay === 'help' ? (
