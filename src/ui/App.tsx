@@ -25,6 +25,7 @@ export interface AppProps {
 type Focus = 'sidebar' | 'terminal';
 type Overlay = 'none' | 'branch' | 'help';
 const FOCUS_KEY = '\x1d'; // ctrl-]
+const COLLAPSE_KEY = '\x1c'; // ctrl-\
 
 export function App({ scopeDir, startDir, scopeLabel, showAll: initialShowAll }: AppProps) {
   const { exit } = useApp();
@@ -37,6 +38,7 @@ export function App({ scopeDir, startDir, scopeLabel, showAll: initialShowAll }:
   const [showAll, setShowAll] = useState(initialShowAll);
   const [view, setView] = useState<ViewMode>('tree');
   const [focus, setFocus] = useState<Focus>('sidebar');
+  const [collapsed, setCollapsed] = useState(false);
   const [overlay, setOverlay] = useState<Overlay>('none');
   const [toast, setToast] = useState<{ text: string; kind: 'info' | 'error' } | null>(null);
   const [activePane, setActivePane] = useState<string | undefined>();
@@ -59,15 +61,29 @@ export function App({ scopeDir, startDir, scopeLabel, showAll: initialShowAll }:
   focusRef.current = focus;
   const activeRef = useRef(activePane);
   activeRef.current = activePane;
-  const stateRef = useRef({ rows, scrollTop, view, sidebarW: 0, overlay, selected });
+  const stateRef = useRef({ rows, scrollTop, view, sidebarW: 0, overlay, selected, collapsed });
 
 
   // ---- layout ----
-  const sidebarW = Math.max(30, Math.min(42, Math.floor(size.cols * 0.28)));
+  const STRIP_W = 2;
+  const sidebarW = collapsed ? STRIP_W : Math.max(30, Math.min(42, Math.floor(size.cols * 0.28)));
   const termW = size.cols - sidebarW - 1;
   const termH = size.rows - 1; // footer
   const listHeight = Math.max(3, termH - 4 - (overlay === 'branch' ? 8 : 0));
-  stateRef.current = { rows, scrollTop, view, sidebarW, overlay, selected };
+  stateRef.current = { rows, scrollTop, view, sidebarW, overlay, selected, collapsed };
+
+  const toggleCollapsed = (focusSidebarOnExpand = false) => {
+    setCollapsed((c) => {
+      const next = !c;
+      // Collapsing hides the sidebar: if it had focus, hand focus to the chat.
+      if (next && focusRef.current === 'sidebar' && activeRef.current) setFocus('terminal');
+      // Expanding keeps focus where it was (VS Code-style), unless asked.
+      if (!next && focusSidebarOnExpand) setFocus('sidebar');
+      return next;
+    });
+  };
+  const toggleCollapsedRef = useRef<(f?: boolean) => void>(toggleCollapsed);
+  toggleCollapsedRef.current = toggleCollapsed;
 
   useEffect(() => {
     ptys.setSize(Math.max(20, termW), Math.max(5, termH));
@@ -152,6 +168,10 @@ export function App({ scopeDir, startDir, scopeLabel, showAll: initialShowAll }:
       if (activeRef.current) setFocus('terminal');
       return;
     }
+    if (st.collapsed) {
+      toggleCollapsedRef.current(true); // click on strip: expand and focus the tree
+      return;
+    }
     setFocus('sidebar');
     if (st.overlay !== 'none') return;
     const perItem = st.view === 'graph' ? 2 : 1;
@@ -181,6 +201,13 @@ export function App({ scopeDir, startDir, scopeLabel, showAll: initialShowAll }:
       }
       str += raw.slice(last);
       if (focusRef.current !== 'terminal' || str === '') return;
+      const cIdx = str.indexOf(COLLAPSE_KEY);
+      if (cIdx !== -1) {
+        const rest = str.slice(0, cIdx) + str.slice(cIdx + 1);
+        if (rest && activeRef.current) ptys.write(activeRef.current, rest);
+        toggleCollapsedRef.current();
+        return;
+      }
       setScrollOffset(0); // typing snaps back to the live tail
       const idx = str.indexOf(FOCUS_KEY);
       if (idx !== -1) {
@@ -315,7 +342,16 @@ export function App({ scopeDir, startDir, scopeLabel, showAll: initialShowAll }:
   });
 
   const handleKey = (input: string, key: Parameters<Parameters<typeof useInput>[0]>[1]) => {
+    if (input === COLLAPSE_KEY || (key.ctrl && input === '\\')) {
+      toggleCollapsed();
+      return;
+    }
     if (input === FOCUS_KEY || (key.ctrl && input === ']')) {
+      if (collapsed) {
+        setCollapsed(false);
+        setFocus('sidebar');
+        return;
+      }
       if (activePane) setFocus('terminal');
       return;
     }
@@ -381,7 +417,20 @@ export function App({ scopeDir, startDir, scopeLabel, showAll: initialShowAll }:
   return (
     <Box flexDirection="column" width={size.cols} height={size.rows}>
       <Box flexGrow={1} flexDirection="row">
-        {/* sidebar */}
+        {/* sidebar (or collapsed strip) */}
+        {collapsed ? (
+          <Box flexDirection="column" width={sidebarW} height={termH}>
+            <Text color={ACCENT}>‹</Text>
+            {rows.slice(0, termH - 2).map((r) => {
+              const n = r.node;
+              const open = n.id === activePane;
+              const color = open ? ACCENT : n.status === 'busy' ? 'yellow' : n.status === 'idle' ? 'green' : 'gray';
+              return (
+                <Text key={n.id} color={color}>{open ? '▶' : n.status === 'dormant' ? '○' : '●'}</Text>
+              );
+            })}
+          </Box>
+        ) : (
         <Box flexDirection="column" width={sidebarW} height={termH}>
           <Box paddingX={1} justifyContent="space-between">
             <Text bold color={focus === 'sidebar' ? ACCENT : 'gray'}>cloomcloop</Text>
@@ -404,6 +453,7 @@ export function App({ scopeDir, startDir, scopeLabel, showAll: initialShowAll }:
             </>
           )}
         </Box>
+        )}
         {/* divider */}
         <Box width={1} flexDirection="column">
           {Array.from({ length: termH }, (_, i) => (
@@ -420,7 +470,7 @@ export function App({ scopeDir, startDir, scopeLabel, showAll: initialShowAll }:
             <Text color={toast.kind === 'error' ? 'red' : ACCENT}>{toast.text}</Text>
           ) : focus === 'terminal' ? (
             <>
-              chat: keys go to claude · <Text color={ACCENT}>ctrl-]</Text> sidebar
+              chat: keys go to claude · <Text color={ACCENT}>ctrl-]</Text> sidebar · <Text color={ACCENT}>ctrl-\</Text> {collapsed ? 'expand' : 'collapse'}
             </>
           ) : overlay === 'branch' ? (
             <>enter open here · tab fields · esc cancel</>

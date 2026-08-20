@@ -165,6 +165,7 @@ export function HelpPane() {
       <Box height={1} />
       <Text bold>terminal focus</Text>
       {L('ctrl-]', 'jump between sidebar and chat')}
+      {L('ctrl-\\', 'collapse/expand the sidebar')}
       {L('…', 'every other key goes to claude')}
     </Box>
   );

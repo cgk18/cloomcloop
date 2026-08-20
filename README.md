@@ -23,6 +23,7 @@ The right pane hosts an actual `claude` process on a pty — it looks identical 
 - **`b`** — branch the selected session: name + one-line intent (+ optional git worktree). Runs `claude --resume <id> --fork-session` right in the pane; the child inherits the whole conversation and the intent goes in via `--append-system-prompt` with hand-back instructions. **Branching a parent that already has children just adds a sibling** — fork as many times as you like, from any node.
 - **`ctrl-]`** — jump between sidebar and chat. In chat focus every other key goes straight to claude.
 - **Mouse works**: click a session to select it, double-click to open it in the pane, click either pane to move focus, wheel to move the selection or scroll the chat's scrollback (typing snaps back to live). Hold Option to select/copy text, as in any mouse-enabled terminal app.
+- **`ctrl-\`** — collapse the sidebar to a thin status strip (chat takes the full width; claude reflows); toggle back or click the strip.
 - **`n`** new root session · **`x`** close pane · **`v`** tree ↔ graph · **`a`** this project ↔ all · **`?`** help · **`q`** quit (embedded sessions end but stay resumable).
 - Sees every session on the machine — live ones via the session registry, past ones via transcripts — and draws lineage from Claude Code's own `forkedFrom` records ("⑂ from &lt;id&gt; @ turn N").
 

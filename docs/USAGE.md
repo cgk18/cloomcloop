@@ -41,3 +41,5 @@ cloomcloop                # sidebar = this repo's sessions · right pane = chat
 | `x` — close pane · `v` — tree/graph · `a` — all projects · `r` — refresh · `?` — help · `q` — quit | | |
 
 Mouse: click select · double-click open · click pane to focus · wheel scroll. Hold **Option** to select/copy text.
+
+**Collapse the sidebar**: `ctrl-\` from anywhere shrinks it to a thin status strip and gives the chat the full width (claude reflows). `ctrl-\` again — or clicking the strip — pops it back out. The strip still shows one status dot per session (`▶` = your open pane).
