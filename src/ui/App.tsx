@@ -247,6 +247,22 @@ export function App({ scopeDir, startDir, scopeLabel, showAll: initialShowAll }:
         return '';
       });
       if (str === '') return;
+      // Terminal.app has no wheel mouse-reporting; it turns each wheel notch into
+      // a burst of 3 arrow keys delivered in ONE chunk (keyboards deliver arrows
+      // one per chunk). Treat all-arrow chunks of 3+ as wheel → scroll the pane.
+      if (/^(?:\x1b\[[AB])+$/.test(str)) {
+        const arrows = str.match(/\x1b\[([AB])/g) ?? [];
+        if (arrows.length >= 3) {
+          const up = str.includes('\x1b[A');
+          setScrollOffset((o) => {
+            const s2 = activeRef.current ? ptys.get(activeRef.current) : undefined;
+            if (!s2) return 0;
+            const max = Math.max(0, s2.term.buffer.active.length - s2.term.rows);
+            return Math.max(0, Math.min(max, o + (up ? arrows.length : -arrows.length)));
+          });
+          return;
+        }
+      }
       if (!paged) setScrollOffset(0); // typing snaps back to the live tail
       const idx = str.indexOf(FOCUS_KEY);
       if (idx !== -1) {
@@ -454,6 +470,16 @@ export function App({ scopeDir, startDir, scopeLabel, showAll: initialShowAll }:
     else if (key.upArrow || input === 'k') setSelected((i) => Math.max(0, i - 1));
     else if (key.pageDown) setSelected((i) => Math.min(rows.length - 1, i + 10));
     else if (key.pageUp) setSelected((i) => Math.max(0, i - 10));
+    else if (input === 'u' || input === 'd') {
+      // scroll the open chat pane from the sidebar (works in every terminal)
+      setScrollOffset((o) => {
+        const s2 = activeRef.current ? ptys.get(activeRef.current) : undefined;
+        if (!s2) return 0;
+        const page = Math.max(1, Math.floor(s2.term.rows / 2));
+        const max = Math.max(0, s2.term.buffer.active.length - s2.term.rows);
+        return Math.max(0, Math.min(max, o + (input === 'u' ? page : -page)));
+      });
+    }
     else if (input === 'g') setSelected(0);
     else if (input === 'G') setSelected(Math.max(0, rows.length - 1));
     else if (input === 'v') setView((v) => (v === 'tree' ? 'metro' : 'tree'));
@@ -537,7 +563,7 @@ export function App({ scopeDir, startDir, scopeLabel, showAll: initialShowAll }:
             <Text color={toast.kind === 'error' ? 'red' : ACCENT}>{toast.text}</Text>
           ) : focus === 'terminal' ? (
             <>
-              chat: keys go to claude · <Text color={ACCENT}>ctrl-]</Text> sidebar · <Text color={ACCENT}>ctrl-\</Text> {collapsed ? 'expand' : 'collapse'}
+              chat: keys go to claude · <Text color={ACCENT}>wheel/pgup</Text> scroll · <Text color={ACCENT}>ctrl-]</Text> sidebar · <Text color={ACCENT}>ctrl-\</Text> {collapsed ? 'expand' : 'collapse'}
             </>
           ) : overlay === 'branch' ? (
             <>enter open here · tab fields · esc cancel</>

@@ -174,13 +174,14 @@ export function HelpPane() {
       {L('x', 'close embedded pane')}
       {L('v', 'tree ↔ metro view')}
       {L('a', 'this project ↔ all projects')}
+      {L('u / d', 'scroll the open chat from here')}
       {L('r', 'refresh')}
       {L('q', 'quit (panes end; sessions resumable)')}
       <Box height={1} />
       <Text bold>terminal focus</Text>
       {L('ctrl-]', 'jump between sidebar and chat')}
       {L('ctrl-\\', 'collapse/expand the sidebar')}
-      {L('pgup/dn', 'scroll chat history (fn+↑/↓)')}
+      {L('wheel', 'scroll chat history (or fn+↑/↓)')}
       {L('…', 'every other key goes to claude')}
     </Box>
   );

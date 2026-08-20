@@ -49,4 +49,4 @@ Mouse: click select · double-click open · click pane to focus · wheel scroll.
 
 **Collapse the sidebar**: `ctrl-\` from anywhere — or **click the divider line** between the panes — shrinks it to a thin status strip and gives the chat the full width (claude reflows). Toggle back the same way (divider or strip click, or `ctrl-\`). The strip still shows one status dot per session (`▶` = your open pane).
 
-**Scrolling the chat**: wheel works in terminals that report it (iTerm2, Kitty, WezTerm). In **Terminal.app the wheel isn't forwarded to apps** — use `PageUp`/`PageDown` (`fn+↑` / `fn+↓`) instead; typing snaps back to live.
+**Scrolling the chat**: the mouse wheel works everywhere — real wheel events in iTerm2/Kitty/WezTerm, and in Terminal.app (which turns wheel notches into arrow-key bursts) cloomcloop detects the bursts and scrolls the pane. `PageUp`/`PageDown` (`fn+↑`/`fn+↓`) also scroll, and from the sidebar `u`/`d` scroll the open chat half a page. Typing snaps back to live.
