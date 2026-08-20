@@ -1,3 +1,16 @@
-node_modules
-dist
+node_modules/
+dist/
 *.log
+*.tsbuildinfo
+*.tgz
+
+# macOS
+.DS_Store
+
+# Claude Code local state (worktrees, local settings) if a session runs in this repo
+.claude/worktrees/
+.claude/settings.local.json
+.claude.local.md
+
+# cloomcloop repo-local state (future: edge payloads, hand-back queue)
+.cloomcloop/
