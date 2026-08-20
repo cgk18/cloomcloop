@@ -1,6 +1,6 @@
 {
   "name": "cloomcloop",
-  "version": "0.1.0",
+  "version": "0.3.0",
   "description": "Branch one Claude Code session into many \u2014 a live tree of your agents, in the terminal.",
   "type": "module",
   "bin": {

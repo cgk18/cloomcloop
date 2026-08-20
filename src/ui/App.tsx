@@ -495,7 +495,7 @@ export function App({ scopeDir, startDir, scopeLabel, showAll: initialShowAll }:
         ) : (
         <Box flexDirection="column" width={sidebarW} height={termH}>
           <Box paddingX={1} justifyContent="space-between">
-            <Text bold color={focus === 'sidebar' ? ACCENT : 'gray'}>cloomcloop</Text>
+            <Text bold color={focus === 'sidebar' ? ACCENT : 'gray'}>cloomcloop <Text dimColor>v0.3</Text></Text>
             <Text dimColor>
               {showAll ? 'all' : scopeLabel} · {view}
             </Text>
