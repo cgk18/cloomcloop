@@ -330,6 +330,7 @@ export function App({ scopeDir, startDir, scopeLabel, showAll: initialShowAll }:
   };
   const openPaneRef = useRef<(node: SessionNode) => void>(() => {});
   const openPane = (node: SessionNode) => {
+    debugLog(`openPane called: ${node.id} status=${node.status} live-pid=${node.live?.pid}`);
     const existing = ptys.get(node.id);
     if (existing && !existing.exited) {
       setActivePane(node.id);
@@ -340,12 +341,15 @@ export function App({ scopeDir, startDir, scopeLabel, showAll: initialShowAll }:
     }
     if (existing) ptys.close(node.id); // dead pane: drop it and respawn fresh
     if (node.status !== 'dormant') {
-      setToast({ text: `“${node.label}” is running in another terminal (pid ${node.live?.pid})`, kind: 'error' });
+      setToast({ text: `“${node.label}” is already open in another terminal — use it there, or branch it here with b`, kind: 'error' });
       return;
     }
     try {
+      debugLog(`openPane spawn: ${node.id} status=${node.status} cwd=${node.cwd ?? scopeDir}`);
       ptys.open(node.id, ['--resume', node.id], node.cwd ?? scopeDir, node.label);
+      debugLog(`openPane spawned ok: ${node.id}`);
     } catch (err: any) {
+      debugLog(`openPane spawn FAILED: ${err?.stack ?? err}`);
       setToast({ text: `couldn't start claude: ${err?.message ?? err}`, kind: 'error' });
       return;
     }
@@ -402,6 +406,7 @@ export function App({ scopeDir, startDir, scopeLabel, showAll: initialShowAll }:
   });
 
   const handleKey = (input: string, key: Parameters<Parameters<typeof useInput>[0]>[1]) => {
+    const isEnter = key.return || input === '\r' || input === '\n';
     if (input === COLLAPSE_KEY || (key.ctrl && input === '\\')) {
       toggleCollapsed();
       return;
@@ -434,7 +439,7 @@ export function App({ scopeDir, startDir, scopeLabel, showAll: initialShowAll }:
         setFormWorktree((w) => !w);
         return;
       }
-      if (key.return) {
+      if (isEnter) {
         if (formField === 'name' && formName.trim()) setFormField('intent');
         else void submitBranch();
       }
@@ -470,7 +475,7 @@ export function App({ scopeDir, startDir, scopeLabel, showAll: initialShowAll }:
       setFormWorktree(false);
       setFormField('name');
       setOverlay('branch');
-    } else if (key.return && current) openPane(current);
+    } else if (isEnter && current) openPane(current);
   };
 
   const active = activePane ? ptys.get(activePane) : undefined;
@@ -537,7 +542,7 @@ export function App({ scopeDir, startDir, scopeLabel, showAll: initialShowAll }:
           ) : overlay === 'branch' ? (
             <>enter open here · tab fields · esc cancel</>
           ) : (
-            <>enter open · b branch · n new · v view · x close · a all · ? help · q quit</>
+            <>dbl-click/enter open · b branch · n new · v view · a all projects · x close pane · ? help · q quit</>
           )}
         </Text>
         <Text dimColor wrap="truncate">
