@@ -63,6 +63,8 @@ Env vars: `CLOOM_CLAUDE_BIN` swaps the binary run in panes (testing); `CLOOM_DEB
 
 ## Docs
 
+- [docs/USAGE.md](docs/USAGE.md) — the 2-minute manual.
+
 - [docs/architecture.md](docs/architecture.md) — module map, mechanisms, build log & lessons.
 - [docs/research/](docs/README.md) — the research behind the design: Claude Code primitives, the third-party landscape, and the loop→graph debate.
 

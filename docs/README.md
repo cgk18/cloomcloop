@@ -1,5 +1,7 @@
 # docs
 
+- [USAGE.md](USAGE.md) — the 2-minute manual.
+
 - [architecture.md](architecture.md) — how cloomcloop works, module map, build log, lessons learned.
 - [research/claude-code-primitives.md](research/claude-code-primitives.md) — Claude Code's native branching/multi-agent/context features and on-disk formats.
 - [research/landscape.md](research/landscape.md) — survey of ~40 third-party multi-session tools and the gap cloomcloop fills.
