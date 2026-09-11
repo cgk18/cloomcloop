@@ -10,6 +10,8 @@ import { EventEmitter } from 'node:events';
  */
 export interface ManagedSession {
   nodeId: string; // session id this pane is (or will become)
+  /** false until the process writes its first byte (drives the "starting…" placeholder) */
+  hasOutput: boolean;
   title: string;
   pty: IPty;
   term: Terminal;
@@ -70,8 +72,9 @@ export class PtyManager extends EventEmitter {
       cwd,
       env,
     });
-    const session: ManagedSession = { nodeId, title, pty, term, exited: false };
+    const session: ManagedSession = { nodeId, title, pty, term, exited: false, hasOutput: false };
     pty.onData((d) => {
+      session.hasOutput = true;
       // Byte count rides along: the renderer pays attention to chunk size to tell a
       // small echo (paint now, keystrokes must feel instant) from a full-screen
       // repaint arriving in pieces (coalesce, or we paint a half-drawn screen).

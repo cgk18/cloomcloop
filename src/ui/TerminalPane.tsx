@@ -23,11 +23,19 @@ export function TerminalPane(props: { session?: ManagedSession; focused: boolean
         <Text bold>nothing open yet</Text>
         <Box height={1} />
         <Text><Text color={ACCENT}>double-click a session</Text> on the left → its chat opens here</Text>
-        <Text>press <Text color={ACCENT}>n</Text> → start a fresh claude in this repo</Text>
-        <Text>press <Text color={ACCENT}>b</Text> → branch the selected session into a new agent</Text>
+        <Text>press <Text color={ACCENT}>ctrl-n</Text> → start a fresh claude in this repo</Text>
+        <Text>press <Text color={ACCENT}>ctrl-b</Text> → branch the selected session into a new agent</Text>
         <Box height={1} />
         <Text dimColor>in the chat, every key goes to claude · ctrl-] comes back to the list</Text>
         <Text dimColor>● live · ○ resumable · ▶ open here · ? shows all keys</Text>
+      </Box>
+    );
+  }
+  if (!session.hasOutput && !session.exited) {
+    return (
+      <Box flexDirection="column" width={width} height={height} alignItems="center" justifyContent="center">
+        <Text color={ACCENT}>⑂ starting “{session.title}”…</Text>
+        <Text dimColor>claude is booting — the conversation appears here in a moment</Text>
       </Box>
     );
   }

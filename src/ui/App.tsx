@@ -181,6 +181,17 @@ export function App({ scopeDir, startDir, scopeLabel, showAll: initialShowAll }:
   // chat is focused. Sidebar-focused keyboard input is left to Ink's useInput.
   const MOUSE_RE = /\x1b\[<(\d+);(\d+);(\d+)([Mm])|\x1b\[M([\s\S]{3})/g;
   const lastClick = useRef({ at: 0, idx: -1 });
+  /** two-press confirmation for destructive actions (quit / close pane) */
+  const confirmRef = useRef<{ action: string; at: number } | null>(null);
+  const confirmed = (action: string): boolean => {
+    const now = Date.now();
+    if (confirmRef.current?.action === action && now - confirmRef.current.at < 3500) {
+      confirmRef.current = null;
+      return true;
+    }
+    confirmRef.current = { action, at: now };
+    return false;
+  };
   const onMouse = (btn: number, x: number, y: number, kind: string) => {
     if (kind !== 'M') return; // presses and wheel only
     const st = stateRef.current;
@@ -308,8 +319,9 @@ export function App({ scopeDir, startDir, scopeLabel, showAll: initialShowAll }:
     return () => clearInterval(t);
   }, [refresh]);
 
+  // Info toasts fade; error toasts stay until the next keypress so they can be read.
   useEffect(() => {
-    if (!toast) return;
+    if (!toast || toast.kind === 'error') return;
     const t = setTimeout(() => setToast(null), 4000);
     return () => clearTimeout(t);
   }, [toast]);
@@ -327,6 +339,7 @@ export function App({ scopeDir, startDir, scopeLabel, showAll: initialShowAll }:
   }, [selected, scrollTop, listHeight, view, rows.length]);
 
   const current = rows[selected]?.node;
+  const parentLabel = current?.parentId ? rows.find((r) => r.node.id === current.parentId)?.node.label : undefined;
 
   // fork-point lookup for selection
   useEffect(() => {
@@ -445,7 +458,7 @@ export function App({ scopeDir, startDir, scopeLabel, showAll: initialShowAll }:
     }
     if (existing) ptys.close(node.id); // dead pane: drop it and respawn fresh
     if (node.status !== 'dormant') {
-      setToast({ text: `“${node.label}” is already open in another terminal — use it there, or branch it here with b`, kind: 'error' });
+      setToast({ text: `“${node.label}” is already open in another terminal — use it there, or branch it here with ctrl-b`, kind: 'error' });
       return;
     }
     try {
@@ -551,9 +564,56 @@ export function App({ scopeDir, startDir, scopeLabel, showAll: initialShowAll }:
       }
       return;
     }
-    // plain sidebar
-    if (input === 'q' || (key.ctrl && input === 'c')) {
-      exit();
+    // plain sidebar. Actions need ctrl+key so stray typing (thinking you're in
+    // the chat) can't branch/quit/close by accident; navigation stays bare.
+    const ctrl = (ch: string) => (key.ctrl && input === ch) || input === String.fromCharCode(ch.charCodeAt(0) - 96);
+    if (toast?.kind === 'error' && !ctrl('q') && !ctrl('x') && !ctrl('c')) setToast(null);
+
+    if (ctrl('q') || ctrl('c')) {
+      const running = ptys.ids().filter((id) => !ptys.get(id)?.exited).length;
+      if (running === 0 || confirmed('quit')) {
+        exit();
+        return;
+      }
+      setToast({ text: `${running} chat${running > 1 ? 's' : ''} open in panes — they end on quit (sessions stay resumable). ctrl-q again to confirm.`, kind: 'error' });
+      return;
+    }
+    if (ctrl('x')) {
+      if (!activePane) return;
+      const pane = ptys.get(activePane);
+      if (pane && !pane.exited && !confirmed('close')) {
+        setToast({ text: `close “${pane.title}”? the chat ends (session stays resumable). ctrl-x again to confirm.`, kind: 'error' });
+        return;
+      }
+      ptys.close(activePane);
+      const next = ptys.ids().at(-1);
+      setActivePane(next);
+      if (!next) setFocus('sidebar');
+      return;
+    }
+    if (ctrl('n')) {
+      newRoot();
+      return;
+    }
+    if (ctrl('b')) {
+      if (!current) return;
+      setFormName('');
+      setFormIntent('');
+      setFormWorktree(false);
+      setFormField('name');
+      setOverlay('branch');
+      return;
+    }
+    if (ctrl('v')) {
+      setView((v) => (v === 'tree' ? 'metro' : 'tree'));
+      return;
+    }
+    if (ctrl('a')) {
+      setShowAll((v) => !v);
+      return;
+    }
+    if (ctrl('r')) {
+      void refresh();
       return;
     }
     if (key.downArrow || input === 'j') setSelected((i) => Math.min(rows.length - 1, i + 1));
@@ -565,29 +625,13 @@ export function App({ scopeDir, startDir, scopeLabel, showAll: initialShowAll }:
       const s2 = activeRef.current ? ptys.get(activeRef.current) : undefined;
       const page = Math.max(1, Math.floor((s2?.term.rows ?? 20) / 2));
       scrollPane(input === 'u' ? 'up' : 'down', page);
-    }
-    else if (input === 'g') setSelected(0);
+    } else if (input === 'g') setSelected(0);
     else if (input === 'G') setSelected(Math.max(0, rows.length - 1));
-    else if (input === 'v') setView((v) => (v === 'tree' ? 'metro' : 'tree'));
-    else if (input === 'a') setShowAll((v) => !v);
-    else if (input === 'r') void refresh();
     else if (input === '?') setOverlay('help');
-    else if (input === 'x') {
-      if (activePane) {
-        ptys.close(activePane);
-        const next = ptys.ids().at(-1);
-        setActivePane(next);
-        if (!next) setFocus('sidebar');
-      }
-    } else if (input === 'n') newRoot();
-    else if (input === 'b') {
-      if (!current) return;
-      setFormName('');
-      setFormIntent('');
-      setFormWorktree(false);
-      setFormField('name');
-      setOverlay('branch');
-    } else if (isEnter && current) openPane(current);
+    else if (isEnter && current) openPane(current);
+    else if (/^[a-z]$/.test(input) && !key.ctrl) {
+      setToast({ text: `actions use ctrl now — e.g. ctrl-b branch, ctrl-n new, ctrl-q quit · ? for all keys`, kind: 'info' });
+    }
   };
 
   // ~50 Text nodes; without the memo they are rebuilt on every pty frame.
@@ -634,12 +678,12 @@ export function App({ scopeDir, startDir, scopeLabel, showAll: initialShowAll }:
           ) : (
             <>
               <Box flexGrow={1} flexDirection="column" overflow="hidden">
-                <TreeList rows={rows} selected={selected} scrollTop={scrollTop} height={listHeight} width={sidebarW} attachedId={activePane} view={view} />
+                <TreeList rows={rows} selected={selected} scrollTop={scrollTop} height={listHeight} width={sidebarW} attachedId={activePane} view={view} showRepo={showAll} />
               </Box>
               {overlay === 'branch' && current ? (
                 <BranchForm parent={current} name={formName} intent={formIntent} worktree={formWorktree} field={formField} onName={setFormName} onIntent={setFormIntent} />
               ) : (
-                <SelectionInfo node={current} forkPoint={current ? forkPoints[current.id] : undefined} width={sidebarW} />
+                <SelectionInfo node={current} forkPoint={current ? forkPoints[current.id] : undefined} width={sidebarW} parentLabel={parentLabel} />
               )}
             </>
           )}
@@ -662,7 +706,7 @@ export function App({ scopeDir, startDir, scopeLabel, showAll: initialShowAll }:
           ) : overlay === 'branch' ? (
             <>enter open here · tab fields · esc cancel</>
           ) : (
-            <>dbl-click/enter open · b branch · n new · v view · a all projects · x close pane · ? help · q quit</>
+            <>dbl-click/enter open · ^b branch · ^n new · ^v view · ^a all · ^x close · ? help · ^q quit</>
           )}
         </Text>
         <Text dimColor wrap="truncate">

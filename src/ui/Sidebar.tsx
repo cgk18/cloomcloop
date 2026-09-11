@@ -1,6 +1,7 @@
 import React from 'react';
 import { Box, Text } from 'ink';
 import TextInput from 'ink-text-input';
+import path from 'node:path';
 import type { SessionNode, TreeRow } from '../graph.js';
 import { shortId } from '../claude/paths.js';
 import { formatAge, oneLine, shortenHome, truncate } from './format.js';
@@ -49,13 +50,15 @@ function TreeListInner(props: {
   width: number;
   attachedId?: string;
   view: ViewMode;
+  /** all-projects mode: show which repo each session belongs to */
+  showRepo?: boolean;
 }) {
-  const { rows, selected, scrollTop, height, width, attachedId, view } = props;
+  const { rows, selected, scrollTop, height, width, attachedId, view, showRepo } = props;
   if (rows.length === 0) {
     return (
       <Box paddingX={1}>
         <Text dimColor wrap="wrap">
-          No sessions yet — press <Text color={ACCENT}>n</Text> for a new one, <Text color={ACCENT}>a</Text> for all projects.
+          No sessions yet — <Text color={ACCENT}>ctrl-n</Text> starts a new one, <Text color={ACCENT}>ctrl-a</Text> shows all projects.
         </Text>
       </Box>
     );
@@ -87,7 +90,8 @@ function TreeListInner(props: {
         }
         const st = GLYPH[n.status];
         const age = formatAge(n.lastActive);
-        const tailTxt = `${age.padStart(3)}`;
+        const repo = showRepo && n.cwd ? truncate(path.basename(n.cwd), 10) : '';
+        const tailTxt = repo ? `${repo} ${age.padStart(3)}` : `${age.padStart(3)}`;
         const room = Math.max(4, width - 2 - prefix.length - 2 - tailTxt.length - 2);
         const label = truncate(n.label, room);
         const pad = Math.max(1, width - 2 - prefix.length - 2 - label.length - tailTxt.length);
@@ -107,13 +111,14 @@ function TreeListInner(props: {
 
 export const TreeList = React.memo(TreeListInner);
 
-function SelectionInfoInner({ node, forkPoint, width }: { node?: SessionNode; forkPoint?: string; width: number }) {
+function SelectionInfoInner(props: { node?: SessionNode; forkPoint?: string; width: number; parentLabel?: string }) {
+  const { node, forkPoint, width } = props;
   if (!node) return null;
   return (
     <Box flexDirection="column" paddingX={1} borderStyle="single" borderColor="gray" borderLeft={false} borderRight={false} borderBottom={false}>
       <Text dimColor wrap="truncate">{shortId(node.id)} · {shortenHome(node.cwd) || '?'}</Text>
       {node.parentId && (
-        <Text color={ACCENT} wrap="truncate">⑂ from {shortId(node.parentId)}{forkPoint ? ` @ ${forkPoint}` : ''}</Text>
+        <Text color={ACCENT} wrap="truncate">⑂ from {props.parentLabel ? `“${props.parentLabel}”` : shortId(node.parentId)}{forkPoint ? ` @ ${forkPoint}` : ''}</Text>
       )}
       {node.meta?.lastPrompt && (
         <Text dimColor wrap="truncate">“{oneLine(node.meta.lastPrompt, width - 4)}”</Text>
@@ -166,22 +171,26 @@ export function HelpPane() {
   );
   return (
     <Box flexDirection="column" paddingX={1}>
-      <Text bold>sidebar keys</Text>
-      {L('↑↓ jk', 'move')}
+      <Text bold>navigate (plain keys)</Text>
+      {L('↑↓ jk', 'move · wheel works too')}
       {L('enter', 'open session in the pane →')}
-      {L('b', 'branch selected (works on any node)')}
-      {L('n', 'new root session')}
-      {L('x', 'close embedded pane')}
-      {L('v', 'tree ↔ metro view')}
-      {L('a', 'this project ↔ all projects')}
       {L('u / d', 'scroll the open chat from here')}
-      {L('r', 'refresh')}
-      {L('q', 'quit (panes end; sessions resumable)')}
+      {L('?', 'this help')}
+      <Box height={1} />
+      <Text bold>act (ctrl + key, so stray typing is safe)</Text>
+      {L('ctrl-b', 'branch selected (works on any node)')}
+      {L('ctrl-n', 'new root session')}
+      {L('ctrl-x', 'close pane (press twice)')}
+      {L('ctrl-v', 'tree ↔ metro view')}
+      {L('ctrl-a', 'this project ↔ all projects')}
+      {L('ctrl-r', 'refresh')}
+      {L('ctrl-q', 'quit (twice if chats open)')}
       <Box height={1} />
       <Text bold>terminal focus</Text>
       {L('ctrl-]', 'jump between sidebar and chat')}
       {L('ctrl-\\', 'collapse/expand the sidebar')}
       {L('wheel', 'scroll chat history (or fn+↑/↓)')}
+      {L('opt', 'hold to select/copy text with the mouse')}
       {L('…', 'every other key goes to claude')}
     </Box>
   );

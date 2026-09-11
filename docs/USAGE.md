@@ -37,13 +37,15 @@ cloomcloop                # sidebar = this repo's sessions · right pane = chat
 
 ## Keys
 
-| Sidebar | | Chat |
+| Sidebar — navigate (plain) | Sidebar — act (ctrl+key) | Chat |
 |---|---|---|
-| `↑↓` `jk` wheel — move | | everything → claude |
-| `enter` / dbl-click — open in pane | | `ctrl-]` / click sidebar — back |
-| `b` — branch selected | | wheel — scrollback |
-| `n` — new session here | | |
-| `x` — close pane · `v` — tree/metro · `a` — all projects · `r` — refresh · `?` — help · `q` — quit | | |
+| `↑↓` `jk` wheel — move | `ctrl-b` — branch selected | everything → claude |
+| `enter` / dbl-click — open in pane | `ctrl-n` — new session here | `ctrl-]` / click sidebar — back |
+| `u` / `d` — scroll the open chat | `ctrl-x` — close pane (twice) | wheel / `fn+↑↓` — scrollback |
+| `?` — help | `ctrl-v` tree/metro · `ctrl-a` all projects | `ctrl-\` — collapse sidebar |
+| | `ctrl-r` refresh · `ctrl-q` quit (twice if chats open) | |
+
+Actions need **ctrl** so typing into the wrong pane can never branch or quit by accident; destructive ones ask for a second press. Error messages stay on screen until your next keypress.
 
 Mouse: click select · double-click open · click pane to focus · wheel scroll. Hold **Option** to select/copy text.
 
