@@ -70,7 +70,9 @@ export function App({ scopeDir, startDir, scopeLabel, showAll: initialShowAll }:
   const termW = size.cols - sidebarW - 1;
   const termH = size.rows - 1; // footer
   const listHeight = Math.max(3, termH - 4 - (overlay === 'branch' ? 8 : 0));
-  const display = buildDisplay(rows, view);
+  // Recomputed per render otherwise — i.e. on every pty frame, for a tree that
+  // only changes when the poll finds something new.
+  const display = React.useMemo(() => buildDisplay(rows, view), [rows, view]);
   stateRef.current = { rows, scrollTop, view, sidebarW, termW, termH, overlay, selected, collapsed, display };
 
   const toggleCollapsed = (focusSidebarOnExpand = false) => {
@@ -99,12 +101,22 @@ export function App({ scopeDir, startDir, scopeLabel, showAll: initialShowAll }:
   }, [stdout]);
 
   // ---- data refresh ----
+  // The poll rebuilds the tree from scratch every time. Handing React a fresh
+  // `rows` array busts TreeList's memo and re-renders the whole sidebar — every
+  // 2.5s, which during a scroll gesture lands as a rhythmic hitch. Compare a
+  // cheap signature first and keep the old array when nothing actually moved.
+  const rowsSig = useRef('');
   const refresh = useCallback(async () => {
     try {
       const [live, transcripts, branches] = await Promise.all([readLiveSessions(), indexTranscripts(), readBranches()]);
       const graph = buildGraph(live, transcripts, branches, { scopeDir: showAll ? undefined : scopeDir });
       setLiveCount(live.length);
-      setRows(flattenTree(graph.roots));
+      const next = flattenTree(graph.roots);
+      const sig = next.map((r) => `${r.node.id}\u0001${r.node.status}\u0001${r.node.label}\u0001${r.prefix}`).join('\u0002');
+      if (sig !== rowsSig.current) {
+        rowsSig.current = sig;
+        setRows(next);
+      }
     } catch (err: any) {
       debugLog(`refresh failed: ${err?.stack ?? err}`);
       setToast({ text: `refresh failed: ${err?.message ?? err}`, kind: 'error' });
@@ -113,25 +125,40 @@ export function App({ scopeDir, startDir, scopeLabel, showAll: initialShowAll }:
   const refreshRef = useRef(refresh);
   refreshRef.current = refresh;
 
-  // ---- pty events: leading-edge render, then trailing throttle for bursts ----
+  // ---- pty events: paint when the burst settles, not while it's arriving ----
+  // A full-screen repaint from claude lands as several chunks (clear, then rows).
+  // Painting on the first chunk shows a half-drawn screen that the next paint
+  // corrects milliseconds later — that flicker is what reads as "choppy". So:
+  // small chunks after a quiet moment paint immediately (keystroke echo must feel
+  // instant), everything else debounces until the burst goes quiet, with a max
+  // wait so continuous output still animates at a steady rate.
+  const SETTLE_MS = 8; // quiet gap that means "the repaint finished"
+  const MAX_WAIT_MS = 32; // never stall a paint longer than this (~30fps floor)
+  const SMALL_CHUNK = 512; // bytes: echo/cursor/spinner, not a screen repaint
   useEffect(() => {
-    let pending = false;
-    let last = 0;
-    const onData = (id: string) => {
-      if (process.env.CLOOM_DEBUG) fs.appendFileSync(process.env.CLOOM_DEBUG, `onData id=${id} active=${activeRef.current} pending=${pending}\n`);
-      if (id !== activeRef.current || pending) return;
+    let timer: ReturnType<typeof setTimeout> | null = null;
+    let burstStart = 0;
+    let lastPaint = 0;
+    const paint = () => {
+      if (timer) {
+        clearTimeout(timer);
+        timer = null;
+      }
+      burstStart = 0;
+      lastPaint = Date.now();
+      setFrame((f) => f + 1);
+    };
+    const onData = (id: string, bytes = 0) => {
+      if (id !== activeRef.current) return;
       const now = Date.now();
-      if (now - last > 12) {
-        last = now;
-        setFrame((f) => f + 1); // first byte of a burst paints immediately
+      if (bytes > 0 && bytes < SMALL_CHUNK && now - lastPaint > SETTLE_MS && !timer) {
+        paint(); // lone small update after a quiet gap: no burst to wait for
         return;
       }
-      pending = true;
-      setTimeout(() => {
-        pending = false;
-        last = Date.now();
-        setFrame((f) => f + 1);
-      }, 12);
+      if (!burstStart) burstStart = now;
+      if (timer) clearTimeout(timer);
+      const wait = Math.max(0, Math.min(SETTLE_MS, MAX_WAIT_MS - (now - burstStart)));
+      timer = setTimeout(paint, wait);
     };
     const onExit = (id: string) => {
       if (id === activeRef.current) setFrame((f) => f + 1);
@@ -140,6 +167,7 @@ export function App({ scopeDir, startDir, scopeLabel, showAll: initialShowAll }:
     ptys.on('data', onData);
     ptys.on('exit', onExit);
     return () => {
+      if (timer) clearTimeout(timer);
       ptys.off('data', onData);
       ptys.off('exit', onExit);
     };
@@ -272,8 +300,10 @@ export function App({ scopeDir, startDir, scopeLabel, showAll: initialShowAll }:
   useEffect(() => {
     void refresh();
     const t = setInterval(() => {
+      // Mid-gesture, the transcript scan and its re-render are exactly the stutter
+      // you feel. It can wait 2.5s more.
+      if (Date.now() - lastScrollAt.current < 500) return;
       void refresh();
-      setFrame((f) => f + 1); // safety net: repaint the pane even if a data event was missed
     }, 2500);
     return () => clearInterval(t);
   }, [refresh]);
@@ -328,6 +358,12 @@ export function App({ scopeDir, startDir, scopeLabel, showAll: initialShowAll }:
   }, [ptys, rows]);
 
   // ---- actions ----
+  const WHEEL_FLUSH_MS = 16; // one batched write per frame
+  const WHEEL_MAX_PENDING = 12; // notches; keeps a hard flick from coasting
+  const clamp = (n: number, lo: number, hi: number) => Math.max(lo, Math.min(hi, n));
+  const wheelRef = useRef<{ notches: number; timer: ReturnType<typeof setTimeout> | null }>({ notches: 0, timer: null });
+  const lastScrollAt = useRef(0);
+
   /** Scroll the chat: claude runs in the alternate screen and handles the wheel
    *  itself (mouseTrackingMode on) — forward synthesized SGR wheel events to it.
    *  Plain full-screen apps without mouse tracking get our buffer scrollback. */
@@ -335,15 +371,28 @@ export function App({ scopeDir, startDir, scopeLabel, showAll: initialShowAll }:
     const id = activeRef.current;
     const s2 = id ? ptys.get(id) : undefined;
     if (!s2 || s2.exited) return;
+    lastScrollAt.current = Date.now();
     const alt = s2.term.buffer.active.type === 'alternate';
     const mouse = (s2.term.modes as any).mouseTrackingMode && (s2.term.modes as any).mouseTrackingMode !== 'none';
     if (alt && mouse) {
-      const st = stateRef.current;
-      const cx = Math.max(1, Math.floor(st.termW / 2));
-      const cy = Math.max(1, Math.floor(st.termH / 2));
-      const btn = dir === 'up' ? 64 : 65;
-      const events = Math.max(1, Math.ceil(amount / 3));
-      ptys.write(id!, `\x1b[<${btn};${cx};${cy}M`.repeat(events));
+      // Coalesce the gesture: a trackpad flick fires wheel events far faster than
+      // claude can repaint, and forwarding each one separately means a repaint per
+      // notch. Accumulate and flush as ONE write per frame, and cap the backlog so
+      // the pane stops when your fingers do instead of coasting.
+      const q = wheelRef.current;
+      q.notches = clamp(q.notches + (dir === 'up' ? 1 : -1) * Math.max(1, Math.ceil(amount / 3)), -WHEEL_MAX_PENDING, WHEEL_MAX_PENDING);
+      if (q.timer) return;
+      q.timer = setTimeout(() => {
+        q.timer = null;
+        const n = q.notches;
+        q.notches = 0;
+        if (n === 0) return;
+        const st = stateRef.current;
+        const cx = Math.max(1, Math.floor(st.termW / 2));
+        const cy = Math.max(1, Math.floor(st.termH / 2));
+        const btn = n > 0 ? 64 : 65;
+        ptys.write(id!, `\x1b[<${btn};${cx};${cy}M`.repeat(Math.abs(n)));
+      }, WHEEL_FLUSH_MS);
       return;
     }
     setScrollOffset((o) => {
@@ -541,6 +590,18 @@ export function App({ scopeDir, startDir, scopeLabel, showAll: initialShowAll }:
     } else if (isEnter && current) openPane(current);
   };
 
+  // ~50 Text nodes; without the memo they are rebuilt on every pty frame.
+  const divider = React.useMemo(
+    () => (
+      <Box width={1} flexDirection="column">
+        {Array.from({ length: termH }, (_, i) => (
+          <Text key={i} dimColor>│</Text>
+        ))}
+      </Box>
+    ),
+    [termH],
+  );
+
   const active = activePane ? ptys.get(activePane) : undefined;
   void frame; // frame bumps re-render the terminal pane on pty output
 
@@ -585,11 +646,7 @@ export function App({ scopeDir, startDir, scopeLabel, showAll: initialShowAll }:
         </Box>
         )}
         {/* divider */}
-        <Box width={1} flexDirection="column">
-          {Array.from({ length: termH }, (_, i) => (
-            <Text key={i} dimColor>│</Text>
-          ))}
-        </Box>
+        {divider}
         {/* terminal */}
         <TerminalPane session={active} focused={focus === 'terminal'} width={termW} height={termH} frame={frame} scrollOffset={scrollOffset} />
       </Box>

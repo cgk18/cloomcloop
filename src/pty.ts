@@ -72,7 +72,10 @@ export class PtyManager extends EventEmitter {
     });
     const session: ManagedSession = { nodeId, title, pty, term, exited: false };
     pty.onData((d) => {
-      term.write(d, () => this.emit('data', nodeId));
+      // Byte count rides along: the renderer pays attention to chunk size to tell a
+      // small echo (paint now, keystrokes must feel instant) from a full-screen
+      // repaint arriving in pieces (coalesce, or we paint a half-drawn screen).
+      term.write(d, () => this.emit('data', nodeId, d.length));
     });
     pty.onExit(({ exitCode }) => {
       session.exited = true;
