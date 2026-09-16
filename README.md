@@ -12,7 +12,7 @@ An IDE-style shell for Claude Code: your sessions as a tree/metro on the left, a
  ────────────────────────────── │
  951047ea · ~/GitHub/myproj     │
  ⑂ from 2de16ee9 @ turn 37      │
- enter open · b branch · n new …│  2 live · 6 shown · pane: api-refactor
+ dbl-click open · ^b branch · ^n new │  2 live · 6 shown · pane: api-refactor
 ```
 
 ## What it does
